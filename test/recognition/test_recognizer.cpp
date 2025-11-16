@@ -16,9 +16,10 @@ int main(int /* argc */, char** /* argv */) {
     // 设置UTF-8编码
     std::locale::global(std::locale("en_US.UTF-8"));
     std::cout.imbue(std::locale());
-    // 配置
-    std::string inputDir = "test/test_images";
-    std::string outputDir = "test/recognition/results";
+    // 配置 - use absolute paths from PROJECT_ROOT_DIR
+    std::string projectRoot = PROJECT_ROOT_DIR;
+    std::string inputDir = projectRoot + "/test/test_images";
+    std::string outputDir = projectRoot + "/test/recognition/results";
     
     // 创建输出目录
     fs::create_directories(outputDir);

@@ -39,32 +39,11 @@ int main(int argc, char** argv) {
     LOG_INFO("📂 Visualization: %s", visDir.c_str());
     LOG_INFO("🔄 Runs per image: %d\n", runsPerImage);
     
-    // 配置Pipeline (参数与Python版本保持一致)
+    // 配置Pipeline - 完全使用默认配置（所有路径已内置）
     ocr::OCRPipelineConfig config;
-    config.detectorConfig.model640Path = modelDir + "/det_v5_640.dxnn";
-    config.detectorConfig.model960Path = modelDir + "/det_v5_960.dxnn";
-    config.detectorConfig.sizeThreshold = 800;
-    config.detectorConfig.boxThresh = 0.6f;
-    config.detectorConfig.unclipRatio = 1.5f;
-    config.detectorConfig.maxCandidates = 1000;
     
-    config.recognizerConfig.modelPaths[3] = modelDir + "/rec_v5_ratio_3.dxnn";
-    config.recognizerConfig.modelPaths[5] = modelDir + "/rec_v5_ratio_5.dxnn";
-    config.recognizerConfig.modelPaths[10] = modelDir + "/rec_v5_ratio_10.dxnn";
-    config.recognizerConfig.modelPaths[15] = modelDir + "/rec_v5_ratio_15.dxnn";
-    config.recognizerConfig.modelPaths[25] = modelDir + "/rec_v5_ratio_25.dxnn";
-    config.recognizerConfig.modelPaths[35] = modelDir + "/rec_v5_ratio_35.dxnn";
-    config.recognizerConfig.dictPath = projectRoot + "/engine/model_files/ppocrv5_dict.txt";
-    config.recognizerConfig.confThreshold = 0.3f;
-    config.recognizerConfig.inputHeight = 48;
-    
-    // Classification config
-    config.useClassification = true;
-    config.classifierConfig.modelPath = modelDir + "/textline_ori.dxnn";
-    config.classifierConfig.threshold = 0.9f;
-    
+    // 只需禁用可视化以提高性能
     config.enableVisualization = false;
-    config.sortResults = true;
     
     // 初始化
     ocr::OCRPipeline pipeline(config);
@@ -181,7 +160,9 @@ int main(int argc, char** argv) {
             boxes.push_back(box);
         }
         
-        cv::Mat visResult = ocr::Visualizer::drawOCRResultsSideBySide(image, boxes, fontPath);
+        // 使用预处理后的图片进行可视化，确保框坐标对齐（与test_pipeline一致）
+        cv::Mat processedImage = pipeline.getLastProcessedImage();
+        cv::Mat visResult = ocr::Visualizer::drawOCRResultsSideBySide(processedImage, boxes, fontPath);
         std::string visPath = visDir + "/" + imageName;
         cv::imwrite(visPath, visResult);
         

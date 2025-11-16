@@ -10,9 +10,10 @@ using namespace ocr;
 using namespace DeepXOCR;
 
 int main(int /* argc */, char** /* argv */) {
-    // Configuration
-    std::string inputDir = "test/test_images";
-    std::string outputDir = "test/detection/results";
+    // Configuration - use absolute paths from PROJECT_ROOT_DIR
+    std::string projectRoot = PROJECT_ROOT_DIR;
+    std::string inputDir = projectRoot + "/test/test_images";
+    std::string outputDir = projectRoot + "/test/detection/results";
     
     // Create output directory
     fs::create_directories(outputDir);

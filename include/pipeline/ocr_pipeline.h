@@ -3,6 +3,7 @@
 #include "detection/text_detector.h"
 #include "classification/text_classifier.h"
 #include "recognition/text_recognizer.h"
+#include "pipeline/document_preprocessing.h"
 #include "common/types.hpp"
 #include "common/visualizer.h"
 #include <opencv2/opencv.hpp>
@@ -24,6 +25,10 @@ using DeepXOCR::TextBox;
 struct OCRPipelineConfig {
     // Detection配置
     DetectorConfig detectorConfig;
+    
+    // Document Preprocessing配置（统一管理 Orientation + UVDoc）
+    DocumentPreprocessingConfig docPreprocessingConfig;
+    bool useDocPreprocessing = true;  // 是否使用文档预处理
     
     // Classification配置
     ClassifierConfig classifierConfig;
@@ -146,6 +151,12 @@ public:
     static bool saveResultsToJSON(const std::vector<PipelineOCRResult>& results,
                                   const std::string& jsonPath);
     
+    /**
+     * @brief 获取最后处理的图片（经过文档预处理后）
+     * @return 预处理后的图片，用于可视化时保证框坐标对齐
+     */
+    cv::Mat getLastProcessedImage() const { return lastProcessedImage_; }
+    
 private:
     /**
      * @brief 对OCR结果排序（从上到下，从左到右）
@@ -164,9 +175,13 @@ private:
 private:
     OCRPipelineConfig config_;
     std::unique_ptr<TextDetector> detector_;
+    std::unique_ptr<DocumentPreprocessingPipeline> docPreprocessing_;
     std::unique_ptr<TextClassifier> classifier_;
     std::unique_ptr<TextRecognizer> recognizer_;
     bool initialized_ = false;
+    
+    // Cache the last processed image for visualization
+    cv::Mat lastProcessedImage_;
 };
 
 } // namespace ocr

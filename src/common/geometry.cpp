@@ -1,4 +1,5 @@
 #include "common/geometry.h"
+#include "common/logger.hpp"
 #include <algorithm>
 #include <cmath>
 
@@ -64,12 +65,11 @@ std::vector<cv::Point2f> Geometry::orderPointsClockwise(const std::vector<cv::Po
 
 cv::Mat Geometry::getRotateCropImage(const cv::Mat& image,
                                      const std::vector<cv::Point2f>& box) {
-    return cropTextRegion(image, box, 48);
+    return cropTextRegion(image, box);
 }
 
 cv::Mat Geometry::cropTextRegion(const cv::Mat& image,
-                                 const std::vector<cv::Point2f>& box,
-                                 int dst_height) {
+                                 const std::vector<cv::Point2f>& box) {
     if (box.size() != 4) {
         return cv::Mat();
     }
@@ -86,39 +86,35 @@ cv::Mat Geometry::cropTextRegion(const cv::Mat& image,
     float max_width = std::max(width1, width2);
     float max_height = std::max(height1, height2);
 
-    // IMPORTANT: For vertical text (height > width * 2), rotate 90 degrees counterclockwise
-    // This matches Python's rotate_if_vertical logic
-    bool is_vertical = max_height > (max_width * 2);
-    if (is_vertical) {
-        std::swap(max_width, max_height);
-        // Rotate points 90 degrees counterclockwise: [TL, TR, BR, BL] -> [BL, TL, TR, BR]
-        std::vector<cv::Point2f> rotated_pts = {
-            ordered_pts[3],  // BL -> TL
-            ordered_pts[0],  // TL -> TR
-            ordered_pts[1],  // TR -> BR
-            ordered_pts[2]   // BR -> BL
-        };
-        ordered_pts = rotated_pts;
-    }
-
     // DON'T resize here! Keep original dimensions.
     // Let Recognition's Preprocess do the PPOCRResize (pad + resize)
-    // This matches Python's behavior: get_rotate_crop_image keeps original size
-    int crop_width = static_cast<int>(max_width);
-    int crop_height = static_cast<int>(max_height);
+    // Use round() for dimension calculation (balanced approach)
+    int crop_width = static_cast<int>(std::round(max_width));
+    int crop_height = static_cast<int>(std::round(max_height));
 
     // 目标点（矩形，保持原始尺寸）
+    // IMPORTANT: Match Python's pts_std coordinates exactly
     std::vector<cv::Point2f> dst_pts = {
         cv::Point2f(0, 0),
-        cv::Point2f(crop_width - 1, 0),
-        cv::Point2f(crop_width - 1, crop_height - 1),
-        cv::Point2f(0, crop_height - 1)
+        cv::Point2f(crop_width, 0),
+        cv::Point2f(crop_width, crop_height),
+        cv::Point2f(0, crop_height)
     };
 
     // 透视变换（保持原始尺寸）
+    // IMPORTANT: Match Python's warpPerspective parameters:
+    // - flags=cv2.INTER_CUBIC (bicubic interpolation)
+    // - borderMode=cv2.BORDER_REPLICATE (replicate border pixels)
     cv::Mat M = cv::getPerspectiveTransform(ordered_pts, dst_pts);
     cv::Mat warped;
-    cv::warpPerspective(image, warped, M, cv::Size(crop_width, crop_height));
+    cv::warpPerspective(image, warped, M, cv::Size(crop_width, crop_height),
+                       cv::INTER_CUBIC, cv::BORDER_REPLICATE);
+
+    // IMPORTANT: For vertical text (height > width * 2), rotate the CROPPED IMAGE 90 degrees counterclockwise
+    // This matches Python's rotate_if_vertical logic which rotates the crop AFTER extraction
+    if (crop_height > crop_width * 2) {
+        cv::rotate(warped, warped, cv::ROTATE_90_COUNTERCLOCKWISE);
+    }
 
     return warped;
 }

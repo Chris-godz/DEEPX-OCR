@@ -16,8 +16,8 @@ namespace ocr {
  * Based on PP-OCRv5 Classification for text orientation detection
  */
 struct ClassifierConfig {
-    // Model path
-    std::string modelPath;
+    // Model path (default - will be resolved to absolute path)
+    std::string modelPath = std::string(PROJECT_ROOT_DIR) + "/engine/model_files/best/textline_ori.dxnn";
     
     // Classification threshold (rotate if score > threshold)
     float threshold = 0.9f;

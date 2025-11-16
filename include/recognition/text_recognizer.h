@@ -20,11 +20,18 @@ struct RecognizerConfig {
     // Recognition threshold
     float confThreshold = 0.3f;
     
-    // Model paths for different aspect ratios
-    std::map<int, std::string> modelPaths;  // ratio -> model_path
+    // Model paths for different aspect ratios (default paths - will be resolved to absolute paths)
+    std::map<int, std::string> modelPaths = {
+        {3, std::string(PROJECT_ROOT_DIR) + "/engine/model_files/best/rec_v5_ratio_3.dxnn"},
+        {5, std::string(PROJECT_ROOT_DIR) + "/engine/model_files/best/rec_v5_ratio_5.dxnn"},
+        {10, std::string(PROJECT_ROOT_DIR) + "/engine/model_files/best/rec_v5_ratio_10.dxnn"},
+        {15, std::string(PROJECT_ROOT_DIR) + "/engine/model_files/best/rec_v5_ratio_15.dxnn"},
+        {25, std::string(PROJECT_ROOT_DIR) + "/engine/model_files/best/rec_v5_ratio_25.dxnn"},
+        {35, std::string(PROJECT_ROOT_DIR) + "/engine/model_files/best/rec_v5_ratio_35.dxnn"}
+    };
     
-    // Character dictionary path
-    std::string dictPath;
+    // Character dictionary path (default - will be resolved to absolute path)
+    std::string dictPath = std::string(PROJECT_ROOT_DIR) + "/engine/model_files/ppocrv5_dict.txt";
     
     // Input height (fixed at 48)
     int inputHeight = 48;

@@ -42,15 +42,14 @@ public:
                                       const std::vector<cv::Point2f>& box);
 
     /**
-     * @brief 裁剪并矫正文本区域
+     * @brief 裁剪并矫正文本区域（保持原始尺寸，不做resize）
      * @param image 输入图像
      * @param box 文本框的四个顶点
-     * @param dst_height 目标高度（宽度会自动计算）
-     * @return 矫正后的文本图像
+     * @return 矫正后的文本图像（尺寸由box计算得出）
+     * @note 最终的resize由Recognition的PPOCRResize处理
      */
     static cv::Mat cropTextRegion(const cv::Mat& image,
-                                  const std::vector<cv::Point2f>& box,
-                                  int dst_height = 48);
+                                  const std::vector<cv::Point2f>& box);
 
     /**
      * @brief 计算多边形的置信度（用于过滤低质量检测框）

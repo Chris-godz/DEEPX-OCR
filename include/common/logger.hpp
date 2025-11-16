@@ -18,7 +18,14 @@ static constexpr auto PastLastSlash(cstr a) -> cstr {
     return PastLastSlash(a, a);
 }
 
-#define __SHORT_FILE__ ({ constexpr cstr sf__{PastLastSlash(__FILE__)}; sf__; })
+// Cross-platform compatible version (without GCC statement expressions)
+#if defined(__GNUC__) || defined(__clang__)
+    // GCC/Clang: Use statement expression for efficiency
+    #define __SHORT_FILE__ ({ constexpr cstr sf__{PastLastSlash(__FILE__)}; sf__; })
+#else
+    // MSVC and others: Use direct call (may be less efficient but compatible)
+    #define __SHORT_FILE__ (PastLastSlash(__FILE__))
+#endif
 
 // Log levels
 #define LOG_LEVEL_OFF 1000
@@ -108,6 +115,14 @@ namespace DeepXOCR {
     ::fflush(stdout)
 #else
 #define LOG_DEBUG(...) ((void)0)
+#endif
+
+// Modern C++17 helper for debug-only code execution
+// Usage: LOG_DEBUG_EXEC([&]{ /* debug code here */ });
+#if LOG_LEVEL <= LOG_LEVEL_DEBUG
+#define LOG_DEBUG_EXEC(lambda) lambda()
+#else
+#define LOG_DEBUG_EXEC(lambda) ((void)0)
 #endif
 
 // TRACE Level

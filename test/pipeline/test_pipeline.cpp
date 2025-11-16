@@ -62,9 +62,11 @@ void printOCRResults(const std::string& imageName,
 
 int main(int argc, char** argv) {
     // 解析命令行参数
-    std::string testImagesDir = "../test/test_images";
-    std::string modelDir = "../engine/model_files";
-    std::string outputDir = "../test/pipeline/results";
+    // 使用 PROJECT_ROOT_DIR 宏（在 CMakeLists.txt 中定义）
+    std::string projectRoot = PROJECT_ROOT_DIR;
+    std::string testImagesDir = projectRoot + "/test/test_images";
+    std::string modelDir = projectRoot + "/engine/model_files";
+    std::string outputDir = projectRoot + "/test/pipeline/results";
     
     if (argc >= 2) {
         testImagesDir = argv[1];
@@ -115,6 +117,18 @@ int main(int argc, char** argv) {
     config.classifierConfig.inputWidth = 160;
     config.classifierConfig.inputHeight = 80;
     config.useClassification = true;
+    
+    // Document Preprocessing 配置（统一管理）
+    config.useDocPreprocessing = true;
+    config.docPreprocessingConfig.useOrientation = true;
+    config.docPreprocessingConfig.orientationConfig.modelPath = modelDir + "/best/doc_ori_fixed.dxnn";
+    config.docPreprocessingConfig.orientationConfig.confidenceThreshold = 0.9f;  // 与Python保持一致
+    
+    config.docPreprocessingConfig.useUnwarping = true;
+    config.docPreprocessingConfig.uvdocConfig.modelPath = modelDir + "/best/UVDoc_pruned_p3.dxnn";
+    config.docPreprocessingConfig.uvdocConfig.inputWidth = 488;   // Python size=[712,488] -> width=488
+    config.docPreprocessingConfig.uvdocConfig.inputHeight = 712;  // Python size=[712,488] -> height=712
+    config.docPreprocessingConfig.uvdocConfig.alignCorners = true;
     
     // Pipeline配置
     config.enableVisualization = true;

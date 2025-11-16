@@ -67,10 +67,24 @@ std::pair<std::string, float> TextRecognizer::Recognize(const cv::Mat& textImage
     // 获取ratio
     int ratio = CalculateRatio(textImage.cols, textImage.rows);
     
+    LOG_DEBUG("Recognize: input size=%dx%d, calculated ratio=%d, using model=ratio_%d",
+              textImage.cols, textImage.rows, 
+              textImage.cols / (textImage.rows > 0 ? textImage.rows : 1), ratio);
+    
     // 预处理
     cv::Mat preprocessed = Preprocess(textImage, ratio);
     if (preprocessed.empty()) {
         LOG_ERROR("Preprocessing failed");
+        return {"", 0.0f};
+    }
+    
+    LOG_DEBUG("Preprocessed: size=%dx%d, type=%d, depth=%d, channels=%d, elemSize=%zu",
+              preprocessed.cols, preprocessed.rows, preprocessed.type(), 
+              preprocessed.depth(), preprocessed.channels(), preprocessed.elemSize());
+    
+    // Debug: check if data is valid
+    if (preprocessed.data == nullptr) {
+        LOG_ERROR("Preprocessed data is nullptr!");
         return {"", 0.0f};
     }
     
@@ -86,8 +100,8 @@ std::pair<std::string, float> TextRecognizer::Recognize(const cv::Mat& textImage
     
     // 置信度过滤
     if (result.second < config_.confThreshold) {
-        LOG_DEBUG("Low confidence result filtered: %.3f < %.3f", 
-                  result.second, config_.confThreshold);
+        LOG_DEBUG("Low confidence FILTERED: text='%s', conf=%.4f < threshold=%.4f", 
+                  result.first.c_str(), result.second, config_.confThreshold);
         return {"", result.second};
     }
     
@@ -160,11 +174,19 @@ int TextRecognizer::CalculateRatio(int width, int height) {
 cv::Mat TextRecognizer::Preprocess(const cv::Mat& image, int ratio) {
     // Recognition预处理：
     // 1. 固定高度48
-    // 2. 宽度根据ratio计算
+    // 2. 宽度根据ratio计算（注意：ratio_3的宽度是120，不是144！）
     // 3. PPOCR方式：Pad → Resize
     
     int target_height = config_.inputHeight;  // 48
-    int target_width = target_height * ratio;
+    int target_width;
+    
+    // Python的映射：ratio_3 -> 120, ratio_5 -> 240, ratio_10 -> 480, ...
+    // ratio_rec_preprocess[0]['resize']['size'] = [48, 120] for ratio_3
+    if (ratio == 3) {
+        target_width = 120;  // Special case: 120 instead of 144
+    } else {
+        target_width = target_height * ratio;
+    }
     
     LOG_DEBUG("Preprocessing: %dx%d -> %dx%d (ratio_%d)",
               image.cols, image.rows, target_width, target_height, ratio);
@@ -179,36 +201,40 @@ cv::Mat TextRecognizer::Preprocess(const cv::Mat& image, int ratio) {
     cv::Mat padded;
     
     // Step 1: Pad到目标ratio
+    // IMPORTANT: 使用灰色(114,114,114)填充，与Python保持一致
+    // 黑色(0,0,0)会导致小图像识别失败
+    const cv::Scalar PAD_COLOR(114, 114, 114);
+    
     if (orig_ratio < target_ratio) {
-        // 图像比目标窄 -> 右侧补边
+        // 图像比目标窄 -> 右侧补边（与Python一致）
         int new_width = static_cast<int>(orig_h * target_ratio);
         int pad_w = new_width - orig_w;
         cv::copyMakeBorder(image, padded, 0, 0, 0, pad_w,
-                          cv::BORDER_CONSTANT, cv::Scalar(0, 0, 0));
-    } else if (orig_ratio > target_ratio) {
-        // 图像比目标宽 -> 底部补边
-        int new_height = static_cast<int>(orig_w / target_ratio);
-        int pad_h = new_height - orig_h;
-        cv::copyMakeBorder(image, padded, 0, pad_h, 0, 0,
-                          cv::BORDER_CONSTANT, cv::Scalar(0, 0, 0));
+                          cv::BORDER_CONSTANT, PAD_COLOR);
     } else {
-        // 已经是目标ratio
+        // orig_ratio >= target_ratio: 图像比目标宽或相等
+        // Python在这种情况下不做padding，直接使用原图
+        // 与Python保持一致！
         padded = image.clone();
     }
     
     // Step 2: Resize到目标尺寸
-    cv::Mat final_image;
-    cv::resize(padded, final_image, cv::Size(target_width, target_height));
+    cv::Mat resized;
+    cv::resize(padded, resized, cv::Size(target_width, target_height));
+    
+    // NPU模式：不做归一化，也不做transpose！
+    // DXRT引擎内部会处理NHWC->NCHW的转换
+    // 输入应该是HWC格式的uint8 [0-255]
     
     // 确保连续内存
-    if (!final_image.isContinuous()) {
-        final_image = final_image.clone();
+    if (!resized.isContinuous()) {
+        resized = resized.clone();
     }
     
-    LOG_DEBUG("Preprocessed: padded %dx%d -> resized %dx%d",
-              padded.cols, padded.rows, final_image.cols, final_image.rows);
+    LOG_DEBUG("Preprocessed: input %dx%d -> padded %dx%d -> resized %dx%d HWC uint8",
+              image.cols, image.rows, padded.cols, padded.rows, target_width, target_height);
     
-    return final_image;
+    return resized;
 }
 
 std::pair<std::string, float> TextRecognizer::Postprocess(dxrt::TensorPtrs& outputs) {
@@ -222,22 +248,23 @@ std::pair<std::string, float> TextRecognizer::Postprocess(dxrt::TensorPtrs& outp
 }
 
 void TextRecognizer::PrintModelUsageStats() const {
-    LOG_INFO("=== Recognition Model Usage Statistics ===");
+    LOG_DEBUG("=== Recognition Model Usage Statistics ===");
     int total = 0;
     for (const auto& [ratio, count] : model_usage_) {
         total += count;
     }
     
     if (total == 0) {
-        LOG_INFO("No models used yet");
+        LOG_DEBUG("No models used yet");
         return;
     }
     
-    for (const auto& [ratio, count] : model_usage_) {
-        float percentage = (count * 100.0f) / total;
-        LOG_INFO("  ratio_%d: %d times (%.1f%%)", ratio, count, percentage);
-    }
-    LOG_INFO("  Total: %d recognitions", total);
+    LOG_DEBUG_EXEC(([&]{
+        for (const auto& [ratio, count] : model_usage_) {
+            LOG_DEBUG("  ratio_%d: %d times (%.1f%%)", ratio, count, (count * 100.0f) / total);
+        }
+        LOG_DEBUG("  Total: %d recognitions", total);
+    }));
 }
 
 } // namespace DeepXOCR

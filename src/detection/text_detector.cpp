@@ -98,14 +98,11 @@ std::vector<DeepXOCR::TextBox> TextDetector::detect(const cv::Mat& image) {
     int target_size = (engine == model640_.get()) ? 640 : 960;
 
     // === Stage 1: Preprocessing ===
-    auto t1 = std::chrono::high_resolution_clock::now();
     int resized_h, resized_w;
     cv::Mat preprocessed = preprocess(image, target_size, resized_h, resized_w);
-    auto t2 = std::chrono::high_resolution_clock::now();
 
     // === Stage 2: Model Inference ===
     cv::Mat pred = runInference(engine, preprocessed);
-    auto t3 = std::chrono::high_resolution_clock::now();
     
     if (pred.empty()) {
         LOG_ERROR("Inference returned empty result");
@@ -114,15 +111,6 @@ std::vector<DeepXOCR::TextBox> TextDetector::detect(const cv::Mat& image) {
 
     // === Stage 3: Postprocessing ===
     auto boxes = postprocessor_->process(pred, orig_h, orig_w, resized_h, resized_w);
-    auto t4 = std::chrono::high_resolution_clock::now();
-    
-    // Calculate stage timings
-    std::chrono::duration<double, std::milli> preprocess_ms = t2 - t1;
-    std::chrono::duration<double, std::milli> inference_ms = t3 - t2;
-    std::chrono::duration<double, std::milli> postprocess_ms = t4 - t3;
-    
-    LOG_INFO("Stage timing - Preprocess: %.2f ms | Inference: %.2f ms | Postprocess: %.2f ms",
-             preprocess_ms.count(), inference_ms.count(), postprocess_ms.count());
     LOG_INFO("Detected %zu text boxes", boxes.size());
     
     // Save final detection result if enabled
@@ -169,20 +157,24 @@ cv::Mat TextDetector::preprocess(const cv::Mat& image, int target_size,
     cv::Mat padded;
     int pad_h = 0, pad_w = 0;
     
+    // IMPORTANT: 使用灰色(114,114,114)填充，与Python保持一致
+    // 黑色(0,0,0)会导致边缘识别失败
+    const cv::Scalar PAD_COLOR(114, 114, 114);
+    
     if (orig_ratio < target_ratio) {
         // Image is taller than square ratio -> pad width
         int new_width = static_cast<int>(orig_h * target_ratio);
         pad_w = new_width - orig_w;
         // Pad on right (matching Python's left=0, right=pad_width)
         cv::copyMakeBorder(image, padded, 0, 0, 0, pad_w,
-                          cv::BORDER_CONSTANT, cv::Scalar(0, 0, 0));
+                          cv::BORDER_CONSTANT, PAD_COLOR);
     } else if (orig_ratio > target_ratio) {
         // Image is wider than square ratio -> pad height
         int new_height = static_cast<int>(orig_w / target_ratio);
         pad_h = new_height - orig_h;
         // Pad on bottom (matching Python's top=0, bottom=pad_height)
         cv::copyMakeBorder(image, padded, 0, pad_h, 0, 0,
-                          cv::BORDER_CONSTANT, cv::Scalar(0, 0, 0));
+                          cv::BORDER_CONSTANT, PAD_COLOR);
     } else {
         // Already square
         padded = image.clone();
@@ -196,8 +188,8 @@ cv::Mat TextDetector::preprocess(const cv::Mat& image, int target_size,
     resized_h = padded.rows;
     resized_w = padded.cols;
     
-    LOG_INFO("PPOCR Preprocess: original %dx%d -> padded %dx%d (pad_h=%d, pad_w=%d) -> resized %dx%d",
-             orig_w, orig_h, padded.cols, padded.rows, pad_h, pad_w, target_size, target_size);
+    LOG_DEBUG("PPOCR Preprocess: original %dx%d -> padded %dx%d (pad_h=%d, pad_w=%d) -> resized %dx%d",
+              orig_w, orig_h, padded.cols, padded.rows, pad_h, pad_w, target_size, target_size);
     
     return final_image;
 }
@@ -212,8 +204,8 @@ cv::Mat TextDetector::runInference(dxrt::InferenceEngine* engine, const cv::Mat&
     size_t expected_size = engine->GetInputSize();
     size_t actual_size = h * w * c;
     
-    LOG_INFO("Input: %dx%dx%d (HWC, uint8), actual size: %zu bytes, expected: %zu bytes", 
-             h, w, c, actual_size, expected_size);
+    LOG_DEBUG("Input: %dx%dx%d (HWC, uint8), actual size: %zu bytes, expected: %zu bytes", 
+              h, w, c, actual_size, expected_size);
     
     if (actual_size != expected_size) {
         LOG_ERROR("Input size mismatch! Expected %zu but got %zu", expected_size, actual_size);
@@ -235,11 +227,11 @@ cv::Mat TextDetector::runInference(dxrt::InferenceEngine* engine, const cv::Mat&
     auto output_tensor = outputs[0];
     auto shape = output_tensor->shape();
     
-    LOG_INFO("Output shape: [%zu, %zu, %zu, %zu]", 
-             shape.size() > 0 ? static_cast<size_t>(shape[0]) : 0,
-             shape.size() > 1 ? static_cast<size_t>(shape[1]) : 0,
-             shape.size() > 2 ? static_cast<size_t>(shape[2]) : 0,
-             shape.size() > 3 ? static_cast<size_t>(shape[3]) : 0);
+    LOG_DEBUG("Output shape: [%zu, %zu, %zu, %zu]", 
+              shape.size() > 0 ? static_cast<size_t>(shape[0]) : 0,
+              shape.size() > 1 ? static_cast<size_t>(shape[1]) : 0,
+              shape.size() > 2 ? static_cast<size_t>(shape[2]) : 0,
+              shape.size() > 3 ? static_cast<size_t>(shape[3]) : 0);
     
     // Shape should be [1, 1, H, W] for detection
     if (shape.size() != 4) {
@@ -254,23 +246,32 @@ cv::Mat TextDetector::runInference(dxrt::InferenceEngine* engine, const cv::Mat&
     cv::Mat pred(out_h, out_w, CV_32FC1);
     const float* output_data = reinterpret_cast<const float*>(output_tensor->data());
     
-    // Check output data statistics
-    float min_val = FLT_MAX, max_val = -FLT_MAX, sum = 0.0f;
-    int total_pixels = out_h * out_w;
-    
     for (int i = 0; i < out_h; i++) {
         for (int j = 0; j < out_w; j++) {
             float val = output_data[i * out_w + j];
             // DBNet output is already probability (no sigmoid needed)
             pred.at<float>(i, j) = val;
-            min_val = std::min(min_val, val);
-            max_val = std::max(max_val, val);
-            sum += val;
         }
     }
     
-    LOG_INFO("Output statistics: min=%.4f, max=%.4f, mean=%.4f",
-             min_val, max_val, sum / total_pixels);
+    // Check output data statistics (debug only)
+    LOG_DEBUG_EXEC(([&]{
+        float min_val = FLT_MAX;
+        float max_val = -FLT_MAX;
+        float sum = 0.0f;
+        int total_pixels = out_h * out_w;
+        
+        for (int i = 0; i < out_h; i++) {
+            for (int j = 0; j < out_w; j++) {
+                float val = pred.at<float>(i, j);
+                min_val = std::min(min_val, val);
+                max_val = std::max(max_val, val);
+                sum += val;
+            }
+        }
+        
+        LOG_DEBUG("Output statistics: min=%.4f max=%.4f mean=%.4f", min_val, max_val, sum / total_pixels);
+    }));
 
     return pred;
 }

@@ -292,27 +292,27 @@ void Visualizer::putTextUTF8(cv::Mat& img, const std::string& text, cv::Point or
 cv::Mat Visualizer::drawOCRResultsSideBySide(const cv::Mat& image,
                                             const std::vector<TextBox>& boxes,
                                             const std::string& font_path) {
-    // 尝试多个可能的字体路径（支持从不同目录运行）
-    std::vector<std::string> font_candidates = {
-        font_path,  // 用户指定的路径
-        "../engine/fonts/NotoSansCJK-Regular.ttc",  // 从build_Release运行
-        "../../../engine/fonts/NotoSansCJK-Regular.ttc",  // 从build_Release/test/xxx运行
-        "../../engine/fonts/NotoSansCJK-Regular.ttc",  // 从build_Release/test运行
-    };
-    
+    // 字体路径：优先使用用户指定，否则使用绝对路径
     std::string font;
-    for (const auto& candidate : font_candidates) {
-        if (candidate.empty()) continue;
-        std::ifstream file(candidate);
+    
+    if (!font_path.empty()) {
+        std::ifstream file(font_path);
         if (file.good()) {
-            font = candidate;
-            break;
+            font = font_path;
         }
     }
     
     if (font.empty()) {
-        LOG_WARN("Font file not found, trying default path");
-        font = "../engine/fonts/NotoSansCJK-Regular.ttc";
+        // 使用绝对路径（从 PROJECT_ROOT_DIR 宏）
+        std::string projectRoot = PROJECT_ROOT_DIR;
+        font = projectRoot + "/engine/fonts/NotoSansCJK-Regular.ttc";
+        
+        std::ifstream file(font);
+        if (!file.good()) {
+            LOG_ERROR("Font file not found: %s", font.c_str());
+            LOG_ERROR("Please ensure the font file exists in: engine/fonts/");
+            throw std::runtime_error("Font file not found");
+        }
     }
     
     int h = image.rows;

@@ -26,9 +26,9 @@ struct DetectorConfig {
     float unclipRatio = 1.5f;     // Box expansion ratio
     int maxCandidates = 1500;     // Max number of candidate boxes
     
-    // Model paths for different resolutions
-    std::string model640Path;
-    std::string model960Path;
+    // Model paths for different resolutions (default paths - will be resolved to absolute paths)
+    std::string model640Path = std::string(PROJECT_ROOT_DIR) + "/engine/model_files/best/det_v5_640.dxnn";
+    std::string model960Path = std::string(PROJECT_ROOT_DIR) + "/engine/model_files/best/det_v5_960.dxnn";
     
     // Image size threshold for model selection
     int sizeThreshold = 800;      // Use 640 if max(w,h) < threshold, else 960

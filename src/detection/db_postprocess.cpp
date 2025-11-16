@@ -31,12 +31,12 @@ std::vector<DeepXOCR::TextBox> DBPostProcessor::process(const cv::Mat& pred,
     cv::threshold(pred, bitmap, thresh_, 255, cv::THRESH_BINARY);
     bitmap.convertTo(bitmap, CV_8UC1);
 
-    LOG_INFO("Binary threshold: %.2f, bitmap size: %dx%d, non-zero: %d", 
+    LOG_DEBUG("Binary threshold: %.2f, bitmap size: %dx%d, non-zero: %d", 
               thresh_, bitmap.cols, bitmap.rows, cv::countNonZero(bitmap));
 
     // 查找轮廓
     auto contours = findContours(bitmap);
-    LOG_INFO("Found %zu contours", contours.size());
+    LOG_DEBUG("Found %zu contours", contours.size());
 
     // 3. 处理每个轮廓
     int num_contours = std::min(static_cast<int>(contours.size()), max_candidates_);
