@@ -64,10 +64,11 @@ int main(int argc, char** argv) {
     config.classifierConfig.inputHeight = 80;
     config.useClassification = true;
     
-    config.useDocPreprocessing = true;
-    config.docPreprocessingConfig.useOrientation = true;
+    // Disable DocPreprocessing for visualization testing (it modifies image geometry)
+    config.useDocPreprocessing = false;
+    config.docPreprocessingConfig.useOrientation = false;
     config.docPreprocessingConfig.orientationConfig.modelPath = modelDir + "/server/doc_ori_fixed.dxnn";
-    config.docPreprocessingConfig.useUnwarping = true;
+    config.docPreprocessingConfig.useUnwarping = false;
     config.docPreprocessingConfig.uvdocConfig.modelPath = modelDir + "/server/UVDoc_pruned_p3.dxnn";
     config.docPreprocessingConfig.uvdocConfig.inputWidth = 488;
     config.docPreprocessingConfig.uvdocConfig.inputHeight = 712;
@@ -88,12 +89,22 @@ int main(int argc, char** argv) {
         return -1;
     }
 
+    // Create output directory for visualization
+    std::string outputDir = projectRoot + "/test/pipeline/async_results";
+    fs::create_directories(outputDir);
+    LOG_INFO("Output directory: {}", outputDir);
+
     // Pre-load images to memory to measure pure pipeline performance
     std::vector<cv::Mat> images;
+    std::vector<std::string> imageNames;
     images.reserve(imageFiles.size());
+    imageNames.reserve(imageFiles.size());
     for (const auto& path : imageFiles) {
         cv::Mat img = cv::imread(path);
-        if (!img.empty()) images.push_back(img);
+        if (!img.empty()) {
+            images.push_back(img);
+            imageNames.push_back(fs::path(path).filename().string());
+        }
     }
     LOG_INFO("Loaded {} images", images.size());
 
@@ -105,6 +116,10 @@ int main(int argc, char** argv) {
 
     auto start_time = std::chrono::high_resolution_clock::now();
     std::atomic<int> completed_count{0};
+    
+    // Store results for visualization (only last repeat)
+    std::map<int, std::vector<ocr::PipelineOCRResult>> savedResults;
+    std::mutex resultsMutex;
 
     // Consumer Thread
     std::thread consumer([&]() {
@@ -113,6 +128,19 @@ int main(int argc, char** argv) {
         while (completed_count.load() < total_tasks) {
             if (pipeline.getResult(results, id)) {
                 completed_count.fetch_add(1);
+                
+                // Save results from last repeat for visualization
+                int imageIdx = id % images.size();
+                int repeatIdx = id / images.size();
+                
+                LOG_INFO("Got result: id={}, imageIdx={}, repeatIdx={}, results={}", 
+                         id, imageIdx, repeatIdx, results.size());
+                
+                if (repeatIdx == NUM_REPEATS - 1) {
+                    std::lock_guard<std::mutex> lock(resultsMutex);
+                    savedResults[imageIdx] = results;
+                }
+                
                 if (completed_count.load() % 10 == 0) {
                     LOG_INFO("Processed {}/{}", completed_count.load(), total_tasks);
                 }
@@ -147,6 +175,58 @@ int main(int argc, char** argv) {
     LOG_INFO("Average Time: {:.2f} ms/image", total_time_ms / total_tasks);
     LOG_INFO("FPS: {:.2f}", fps);
     LOG_INFO("=======================================");
+    
+    // Save visualization results
+    LOG_INFO("\nSaving visualization results...");
+    std::string fontPath = projectRoot + "/engine/fonts/NotoSansCJK-Regular.ttc";
+    int savedCount = 0;
+    
+    for (size_t i = 0; i < images.size(); ++i) {
+        auto it = savedResults.find(i);
+        if (it == savedResults.end() || it->second.empty()) continue;
+        
+        const auto& results = it->second;
+        
+        // // Debug: check box data
+        // if (i == 0 && !results.empty()) {
+        //     LOG_INFO("DEBUG: First image results:");
+        //     for (size_t k = 0; k < std::min(size_t(3), results.size()); ++k) {
+        //         LOG_INFO("  Result[{}]: box.size()={}, text='{}', conf={:.3f}",
+        //                  k, results[k].box.size(), 
+        //                  results[k].text.empty() ? "<empty>" : results[k].text.substr(0, 20),
+        //                  results[k].confidence);
+        //         if (results[k].box.size() >= 4) {
+        //             LOG_INFO("    box: [{:.1f},{:.1f}] [{:.1f},{:.1f}] [{:.1f},{:.1f}] [{:.1f},{:.1f}]",
+        //                      results[k].box[0].x, results[k].box[0].y,
+        //                      results[k].box[1].x, results[k].box[1].y,
+        //                      results[k].box[2].x, results[k].box[2].y,
+        //                      results[k].box[3].x, results[k].box[3].y);
+        //         }
+        //     }
+        // }
+        
+        // Convert results to TextBox format for visualization
+        std::vector<DeepXOCR::TextBox> boxes;
+        for (const auto& result : results) {
+            DeepXOCR::TextBox box;
+            for (int j = 0; j < 4; j++) {
+                box.points[j] = result.box[j];
+            }
+            box.text = result.text;
+            box.confidence = result.confidence;
+            boxes.push_back(box);
+        }
+        
+        // Draw visualization
+        cv::Mat visResult = ocr::Visualizer::drawOCRResultsSideBySide(images[i], boxes, fontPath);
+        std::string visPath = outputDir + "/" + imageNames[i];
+        cv::imwrite(visPath, visResult);
+        savedCount++;
+        
+        LOG_INFO("Saved: {} ({} boxes)", imageNames[i], results.size());
+    }
+    
+    LOG_INFO("\n✅ Saved {} visualization images to: {}", savedCount, outputDir);
 
     return 0;
 }

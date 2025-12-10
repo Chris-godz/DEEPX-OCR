@@ -37,8 +37,8 @@ struct LoggerConfig {
     size_t maxFileSize = 10 * 1024 * 1024;  // Max file size: 10 MB
     size_t maxFiles = 5;                    // Max number of rotated files
     
-    // Log pattern: [time][level][file:line] message
-    std::string pattern = "[%Y-%m-%d %H:%M:%S.%e][%^%l%$][%s:%#] %v";
+    // Log pattern: [time][level][thread][file:line] message
+    std::string pattern = "[%Y-%m-%d %H:%M:%S.%e][%^%l%$][%t][%s:%#] %v";
 };
 
 /**

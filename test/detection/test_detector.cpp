@@ -45,8 +45,8 @@ int main(int /* argc */, char** /* argv */) {
 
     // Configure detector
     DetectorConfig config;
-    config.model640Path = "engine/model_files/server/det_v5_640.dxnn";
-    config.model960Path = "engine/model_files/server/det_v5_960.dxnn";
+    config.model640Path = projectRoot + "/engine/model_files/server/det_v5_640.dxnn";
+    config.model960Path = projectRoot + "/engine/model_files/server/det_v5_960.dxnn";
     config.thresh = 0.3f;
     config.boxThresh = 0.6f;
     config.maxCandidates = 1500;  // 与Python保持一致

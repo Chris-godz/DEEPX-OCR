@@ -168,7 +168,7 @@ public:
      * @param id 输出任务ID
      * @return true表示获取成功，false表示队列为空
      */
-    bool getResult(std::vector<PipelineOCRResult>& results, int64_t& id);
+    bool getResult(std::vector<PipelineOCRResult>& results, int64_t& id, cv::Mat* processedImage = nullptr);
     
 private:
     /**
@@ -199,11 +199,35 @@ private:
 
     struct OutputTask {
         std::vector<PipelineOCRResult> results;
+        cv::Mat processedImage;  // UVDoc 处理后的图像（用于可视化）
         int64_t id;
+    };
+
+    // Context for tracking async recognition of an entire image
+    struct RecognitionTaskContext {
+        int64_t taskId;
+        cv::Mat processedImage;                            // UVDoc 处理后的图像（用于可视化）
+        std::vector<cv::Mat> crops;                        // Cropped images (keep alive during async)
+        std::vector<std::vector<cv::Point2f>> boxPoints;  // Box coordinates for each crop
+        std::vector<PipelineOCRResult> results;            // Results (one per crop)
+        std::atomic<int> pendingCount{0};                  // Number of pending recognitions
+        std::mutex resultMutex;                            // Protect results vector
+        
+        RecognitionTaskContext(int64_t id, size_t cropCount)
+            : taskId(id), crops(cropCount), boxPoints(cropCount), results(cropCount) {
+            pendingCount.store(static_cast<int>(cropCount));
+        }
+    };
+
+    // Context for a single crop's async recognition
+    struct RecognitionCropContext {
+        std::shared_ptr<RecognitionTaskContext> taskCtx;
+        size_t cropIndex;
     };
 
     void detectionLoop();
     void recognitionLoop();
+    void onRecognitionComplete(const std::string& text, float confidence, void* userArg);
 
     std::unique_ptr<ConcurrentQueue<DetectionTask>> detQueue_;
     std::unique_ptr<ConcurrentQueue<RecognitionTask>> recQueue_;

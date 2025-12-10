@@ -66,6 +66,7 @@ std::pair<std::string, float> CTCDecoder::decode(const dxrt::TensorPtr& output) 
     }
     
     auto shape = output->shape();
+    
     if (shape.size() != 3) {
         LOG_ERROR("Expected 3D output [batch, time_steps, num_classes], got {} dimensions", 
                   shape.size());

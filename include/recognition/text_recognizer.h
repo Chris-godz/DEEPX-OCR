@@ -74,7 +74,8 @@ public:
     std::pair<std::string, float> Wait(int jobId);
     
     // Register callback for async mode
-    void RegisterCallback(std::function<int(dxrt::TensorPtrs&, void*)> callback);
+    // Callback signature: void(text, confidence, userArg)
+    void RegisterCallback(std::function<void(const std::string&, float, void*)> callback);
     
     // Print model usage statistics
     void PrintModelUsageStats() const;
@@ -99,6 +100,12 @@ private:
     // Recognition models for different aspect ratios
     // ratio_3, ratio_5, ratio_10, ratio_15, ratio_25, ratio_35
     std::map<int, std::unique_ptr<dxrt::InferenceEngine>> models_;
+    
+    // User callback for async mode
+    std::function<void(const std::string&, float, void*)> userCallback_;
+    
+    // Internal callback handler
+    int internalCallback(dxrt::TensorPtrs& outputs, void* userArg);
     
     // CTC Decoder
     std::unique_ptr<ocr::CTCDecoder> decoder_;

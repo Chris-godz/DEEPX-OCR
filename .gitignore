@@ -166,3 +166,5 @@ build/
 
 # VS Code
 .vscode/
+engine/model_files
+logs/

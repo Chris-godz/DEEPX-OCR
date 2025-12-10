@@ -16,21 +16,41 @@ namespace fs = std::filesystem;
 using json = nlohmann::json;
 
 int main(int argc, char** argv) {
-    // 解析命令行参数：运行次数
+    // 解析命令行参数：运行次数、模型类型、是否使用UVDoc
     int runsPerImage = 3;
+    std::string modelType = "server";  // Default: server models
+    bool useUVDoc = false;  // Default: disable UVDoc for accurate benchmark with ground truth labels
+    
     if (argc > 1) {
         runsPerImage = std::atoi(argv[1]);
         if (runsPerImage < 1) runsPerImage = 3;
     }
     
+    if (argc > 2) {
+        modelType = argv[2];
+        if (modelType != "server" && modelType != "mobile") {
+            LOG_ERROR("Invalid model type: {}. Use 'server' or 'mobile'", modelType);
+            return -1;
+        }
+    }
+    
+    if (argc > 3) {
+        std::string uvdocArg = argv[3];
+        if (uvdocArg == "uvdoc" || uvdocArg == "true" || uvdocArg == "1") {
+            useUVDoc = true;
+        }
+    }
+    
     LOG_INFO("========================================");
     LOG_INFO("DeepX OCR - Benchmark (Async Mode)");
     LOG_INFO("========================================\n");
+    LOG_INFO("Model Type: {}", modelType);
+    LOG_INFO("Use UVDoc: {}", useUVDoc ? "Yes" : "No");
     
     std::string projectRoot = PROJECT_ROOT_DIR;
     std::string imagesDir = projectRoot + "/images";
-    std::string outputDir = projectRoot + "/benchmark/results";
-    std::string visDir = projectRoot + "/benchmark/vis";
+    std::string outputDir = projectRoot + "/benchmark/results_" + modelType;
+    std::string visDir = projectRoot + "/benchmark/vis_" + modelType;
     
     fs::create_directories(outputDir);
     fs::create_directories(visDir);
@@ -40,8 +60,49 @@ int main(int argc, char** argv) {
     LOG_INFO("📂 Visualization: {}", visDir);
     LOG_INFO("🔄 Runs per image: {}\n", runsPerImage);
     
-    // 配置Pipeline - 使用默认配置（server 模型路径已内置）
+    // 配置Pipeline - 根据模型类型配置
     ocr::OCRPipelineConfig config;
+    
+    // 设置是否使用mobile模型
+    bool useMobileModel = (modelType == "mobile");
+    config.detectorConfig.useMobileModel = useMobileModel;
+    config.recognizerConfig.useMobileModel = useMobileModel;
+    
+    // 如果使用mobile模型，更新模型路径
+    if (useMobileModel) {
+        std::string modelRoot = projectRoot + "/engine/model_files/mobile";
+        config.detectorConfig.model640Path = modelRoot + "/det_mobile_640.dxnn";
+        config.detectorConfig.model960Path = modelRoot + "/det_mobile_960.dxnn";
+        
+        // 更新Recognition模型路径
+        config.recognizerConfig.modelPaths = {
+            {3, modelRoot + "/rec_mobile_ratio_3.dxnn"},
+            {5, modelRoot + "/rec_mobile_ratio_5.dxnn"},
+            {10, modelRoot + "/rec_mobile_ratio_10.dxnn"},
+            {15, modelRoot + "/rec_mobile_ratio_15.dxnn"},
+            {25, modelRoot + "/rec_mobile_ratio_25.dxnn"},
+            {35, modelRoot + "/rec_mobile_ratio_35.dxnn"}
+        };
+        LOG_INFO("✓ Using mobile models\n");
+    } else {
+        LOG_INFO("✓ Using server models\n");
+    }
+    
+    // 配置 Document Preprocessing (与 Python demo 一致)
+    std::string serverModelRoot = projectRoot + "/engine/model_files/server";
+    config.useDocPreprocessing = true;
+    config.docPreprocessingConfig.useOrientation = true;
+    config.docPreprocessingConfig.orientationConfig.modelPath = serverModelRoot + "/doc_ori_fixed.dxnn";
+    config.docPreprocessingConfig.useUnwarping = useUVDoc;  // 使用命令行参数控制
+    config.docPreprocessingConfig.uvdocConfig.modelPath = serverModelRoot + "/UVDoc_pruned_p3.dxnn";
+    config.docPreprocessingConfig.uvdocConfig.inputWidth = 488;
+    config.docPreprocessingConfig.uvdocConfig.inputHeight = 712;
+    config.docPreprocessingConfig.uvdocConfig.alignCorners = true;
+    
+    // 配置 Classification (与 Python demo 一致)
+    config.useClassification = true;
+    config.classifierConfig.modelPath = serverModelRoot + "/textline_ori.dxnn";
+    config.classifierConfig.threshold = 0.9;
     
     // 禁用可视化以提高性能
     config.enableVisualization = false;
@@ -100,6 +161,7 @@ int main(int argc, char** argv) {
     
     // 存储每张图片的结果
     std::map<int64_t, std::vector<ocr::PipelineOCRResult>> allResults;
+    std::map<int64_t, cv::Mat> processedImages;  // 存储处理后的图像用于可视化
     std::mutex resultsMutex;
     
     auto startTime = std::chrono::high_resolution_clock::now();
@@ -108,15 +170,23 @@ int main(int argc, char** argv) {
     std::thread consumer([&]() {
         while (completedCount.load() < totalTasks) {
             std::vector<ocr::PipelineOCRResult> results;
+            cv::Mat processedImage;
             int64_t id;
-            if (pipeline.getResult(results, id)) {
+            if (pipeline.getResult(results, id, &processedImage)) {
                 {
                     std::lock_guard<std::mutex> lock(resultsMutex);
                     // 只保存最后一次运行的结果
                     int imageIdx = id % images.size();
                     int runIdx = id / images.size();
+                    
+                    LOG_INFO("Got result: id={}, imageIdx={}, runIdx={}, results={}", 
+                             id, imageIdx, runIdx, results.size());
+                    
                     if (runIdx == runsPerImage - 1) {
                         allResults[imageIdx] = std::move(results);
+                        if (!processedImage.empty()) {
+                            processedImages[imageIdx] = processedImage.clone();
+                        }
                     }
                 }
                 completedCount.fetch_add(1);
@@ -208,7 +278,9 @@ int main(int argc, char** argv) {
             boxes.push_back(box);
         }
         
-        cv::Mat visResult = ocr::Visualizer::drawOCRResultsSideBySide(images[i], boxes, fontPath);
+        // 使用处理后的图像进行可视化（如果有UVDoc预处理），否则使用原图
+        cv::Mat imageForVis = processedImages.count(i) ? processedImages[i] : images[i];
+        cv::Mat visResult = ocr::Visualizer::drawOCRResultsSideBySide(imageForVis, boxes, fontPath);
         std::string visPath = visDir + "/" + imageName;
         cv::imwrite(visPath, visResult);
         
@@ -218,6 +290,8 @@ int main(int argc, char** argv) {
     LOG_INFO("Completed: {}/{} images", successCount, images.size());
     LOG_INFO("📊 Results saved to: {}", outputDir);
     LOG_INFO("🖼️  Visualizations saved to: {}", visDir);
+    LOG_INFO("\n💡 To calculate accuracy and generate full report, run:");
+    LOG_INFO("   cd {} && python3 benchmark/run_benchmark.py --no-cpp", projectRoot);
     
     return 0;
 }

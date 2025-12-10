@@ -232,8 +232,8 @@ void TextDetector::setCallback(DetectionCallback callback) {
     userCallback_ = callback;
 }
 
-int TextDetector::runAsync(const cv::Mat& input, int height, int width, int64_t taskId, const cv::Mat& originalImage, double preprocess_time) {
-    auto* engine = selectModel(height, width);
+int TextDetector::runAsync(const cv::Mat& input, int orig_h, int orig_w, int resized_h, int resized_w, int64_t taskId, const cv::Mat& originalImage, double preprocess_time) {
+    auto* engine = selectModel(orig_h, orig_w);
     if (!engine) return -1;
 
     if (!input.isContinuous()) {
@@ -241,17 +241,18 @@ int TextDetector::runAsync(const cv::Mat& input, int height, int width, int64_t 
         return -1;
     }
 
-    // Create context
+    // Create context - CLONE input and originalImage to ensure they stay valid during async inference
     DetectionContext* ctx = new DetectionContext{
-        height, width,
-        input.rows, input.cols,
+        orig_h, orig_w,
+        resized_h, resized_w,  // Use the correct padded dimensions for coordinate mapping
         taskId,
-        originalImage,
-        input, // Keep input alive
+        originalImage.clone(),  // Deep copy to keep image alive
+        input.clone(),          // Deep copy to keep input data alive
         preprocess_time
     };
 
-    engine->RunAsync(reinterpret_cast<void*>(const_cast<uint8_t*>(input.data)), ctx);
+    // Use ctx->inputImage.data to ensure we're using the cloned data
+    engine->RunAsync(ctx->inputImage.data, ctx);
     return 0;
 }
 

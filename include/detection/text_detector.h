@@ -117,7 +117,7 @@ public:
      * @param preprocess_time Time taken for preprocessing
      * @return Job ID
      */
-    int runAsync(const cv::Mat& input, int height, int width, int64_t taskId, const cv::Mat& originalImage, double preprocess_time);
+    int runAsync(const cv::Mat& input, int orig_h, int orig_w, int resized_h, int resized_w, int64_t taskId, const cv::Mat& originalImage, double preprocess_time);
 
     /**
      * @brief Get last detection timing details

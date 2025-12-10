@@ -30,8 +30,8 @@ int main(int /* argc */, char** /* argv */) {
     LOG_INFO("=== Step 1: Initialize Detection ===");
     
     DetectorConfig det_config;
-    det_config.model640Path = "engine/model_files/server/det_v5_640.dxnn";
-    det_config.model960Path = "engine/model_files/server/det_v5_960.dxnn";
+    det_config.model640Path = projectRoot + "/engine/model_files/server/det_v5_640.dxnn";
+    det_config.model960Path = projectRoot + "/engine/model_files/server/det_v5_960.dxnn";
     det_config.thresh = 0.3f;
     det_config.boxThresh = 0.6f;
     det_config.maxCandidates = 1500;  // 与Python保持一致
@@ -49,18 +49,18 @@ int main(int /* argc */, char** /* argv */) {
     LOG_INFO("\n=== Step 2: Initialize Recognition ===");
     
     RecognizerConfig rec_config;
-    rec_config.dictPath = "engine/model_files/ppocrv5_dict.txt";
+    rec_config.dictPath = projectRoot + "/engine/model_files/ppocrv5_dict.txt";
     rec_config.confThreshold = 0.3f;
     rec_config.inputHeight = 48;
     
     // 配置所有ratio模型
     rec_config.modelPaths = {
-        {3,  "engine/model_files/server/rec_v5_ratio_3.dxnn"},
-        {5,  "engine/model_files/server/rec_v5_ratio_5.dxnn"},
-        {10, "engine/model_files/server/rec_v5_ratio_10.dxnn"},
-        {15, "engine/model_files/server/rec_v5_ratio_15.dxnn"},
-        {25, "engine/model_files/server/rec_v5_ratio_25.dxnn"},
-        {35, "engine/model_files/server/rec_v5_ratio_35.dxnn"}
+        {3,  projectRoot + "/engine/model_files/server/rec_v5_ratio_3.dxnn"},
+        {5,  projectRoot + "/engine/model_files/server/rec_v5_ratio_5.dxnn"},
+        {10, projectRoot + "/engine/model_files/server/rec_v5_ratio_10.dxnn"},
+        {15, projectRoot + "/engine/model_files/server/rec_v5_ratio_15.dxnn"},
+        {25, projectRoot + "/engine/model_files/server/rec_v5_ratio_25.dxnn"},
+        {35, projectRoot + "/engine/model_files/server/rec_v5_ratio_35.dxnn"}
     };
     
     rec_config.Show();
@@ -133,6 +133,19 @@ int main(int /* argc */, char** /* argv */) {
         
         LOG_INFO("  Detected {} boxes in {:.2f} ms", boxes.size(), det_time.count());
         totalBoxes += boxes.size();
+        
+        // Debug: print first 3 boxes for first image (10.jpg)
+        if (i == 0 && !boxes.empty()) {
+            LOG_INFO("DEBUG SYNC: First image (10.jpg) boxes:");
+            for (size_t k = 0; k < std::min(size_t(3), boxes.size()); ++k) {
+                LOG_INFO("  box[{}]: [{:.1f},{:.1f}] [{:.1f},{:.1f}] [{:.1f},{:.1f}] [{:.1f},{:.1f}]",
+                         k,
+                         boxes[k].points[0].x, boxes[k].points[0].y,
+                         boxes[k].points[1].x, boxes[k].points[1].y,
+                         boxes[k].points[2].x, boxes[k].points[2].y,
+                         boxes[k].points[3].x, boxes[k].points[3].y);
+            }
+        }
         
         if (boxes.empty()) {
             continue;

@@ -152,6 +152,8 @@ bool OCRPipeline::initialize() {
     
     // Set callback for async mode
     detector_->setCallback([this](std::vector<DeepXOCR::TextBox> boxes, int64_t taskId, cv::Mat image, double /*pp*/, double /*inf*/, double /*post*/) {
+        LOG_INFO("Detection callback: taskId={}, boxes={}", taskId, boxes.size());
+        
         // Sort Boxes
         std::sort(boxes.begin(), boxes.end(), [](const DeepXOCR::TextBox& a, const DeepXOCR::TextBox& b) {
             if (std::abs(a.points[0].y - b.points[0].y) < 1.0f) {
@@ -221,6 +223,12 @@ bool OCRPipeline::initialize() {
         LOG_ERROR("Failed to initialize TextRecognizer");
         return false;
     }
+    
+    // Register async callback for recognition
+    recognizer_->RegisterCallback([this](const std::string& text, float confidence, void* userArg) {
+        this->onRecognitionComplete(text, confidence, userArg);
+    });
+    LOG_INFO("Recognition async callback registered");
     
     initialized_ = true;
     LOG_INFO("✅ OCR Pipeline initialized successfully!\n");
@@ -374,7 +382,7 @@ bool OCRPipeline::pushTask(const cv::Mat& image, int64_t id) {
     return true;
 }
 
-bool OCRPipeline::getResult(std::vector<PipelineOCRResult>& results, int64_t& id) {
+bool OCRPipeline::getResult(std::vector<PipelineOCRResult>& results, int64_t& id, cv::Mat* processedImage) {
     if (!running_ || !outQueue_) return false;
     
     OutputTask task;
@@ -384,6 +392,9 @@ bool OCRPipeline::getResult(std::vector<PipelineOCRResult>& results, int64_t& id
     
     results = std::move(task.results);
     id = task.id;
+    if (processedImage) {
+        *processedImage = task.processedImage;
+    }
     return true;
 }
 
@@ -419,8 +430,8 @@ void OCRPipeline::detectionLoop() {
         auto t2 = std::chrono::high_resolution_clock::now();
         double preprocess_time = std::chrono::duration<double, std::milli>(t2 - t1).count();
 
-        // 3. Submit Async Inference
-        detector_->runAsync(preprocessed, h, w, task.id, processedImage, preprocess_time);
+        // 3. Submit Async Inference (pass correct resized_h, resized_w for coordinate mapping)
+        detector_->runAsync(preprocessed, h, w, resized_h, resized_w, task.id, processedImage, preprocess_time);
     }
 }
 
@@ -434,11 +445,16 @@ void OCRPipeline::recognitionLoop() {
         LOG_INFO("Task popped from recognition queue, id={}", task.id);
 
         if (!running_) break;
-        
-        std::vector<PipelineOCRResult> results;
-        results.reserve(task.boxes.size());
+        if (task.boxes.empty()) {
+            // No boxes detected, push empty result
+            if (outQueue_) {
+                outQueue_->push({std::vector<PipelineOCRResult>{}, task.image, task.id});
+                LOG_INFO("Pushed empty result to output queue, id={}", task.id);
+            }
+            continue;
+        }
 
-        // Prepare crops
+        // Prepare crops and box points
         std::vector<cv::Mat> crops;
         std::vector<std::vector<cv::Point2f>> box_points_list;
         crops.reserve(task.boxes.size());
@@ -455,7 +471,16 @@ void OCRPipeline::recognitionLoop() {
             box_points_list.push_back(box_points);
         }
 
-        // Classification
+        if (crops.empty()) {
+            // All crops failed
+            if (outQueue_) {
+                outQueue_->push({std::vector<PipelineOCRResult>{}, task.image, task.id});
+                LOG_INFO("Pushed empty result (no valid crops) to output queue, id={}", task.id);
+            }
+            continue;
+        }
+
+        // Classification (still sync for now - could be async in future)
         if (config_.useClassification && classifier_) {
             auto cls_results = classifier_->ClassifyBatch(crops);
             for (size_t i = 0; i < crops.size() && i < cls_results.size(); ++i) {
@@ -466,31 +491,87 @@ void OCRPipeline::recognitionLoop() {
             }
         }
 
-        // Recognition
-        for (size_t i = 0; i < crops.size(); ++i) {
-            auto [text, confidence] = recognizer_->Recognize(crops[i]);
-            
-            if (!text.empty()) {
-                 PipelineOCRResult res;
-                 res.box = box_points_list[i];
-                 res.text = text;
-                 res.confidence = confidence;
-                 res.index = static_cast<int>(results.size());
-                 results.push_back(res);
-            }
-        }
+        // Create task context for async recognition
+        auto taskCtx = std::make_shared<RecognitionTaskContext>(task.id, crops.size());
+        taskCtx->processedImage = task.image.clone();  // 保存处理后的图像用于可视化
         
-        // Sort results
-        if (config_.sortResults && !results.empty()) {
-             sortOCRResults(results);
-             for (size_t i = 0; i < results.size(); ++i) {
-                 results[i].index = static_cast<int>(i);
-             }
+        // Copy crops and box points to context (keep crops alive during async inference)
+        for (size_t i = 0; i < crops.size(); ++i) {
+            taskCtx->crops[i] = crops[i].clone();  // Clone to ensure data stays valid
+            taskCtx->boxPoints[i] = box_points_list[i];
+            // Pre-initialize result with box info
+            taskCtx->results[i].box = box_points_list[i];
+            taskCtx->results[i].index = static_cast<int>(i);
         }
 
-        if (outQueue_) {
-            outQueue_->push({std::move(results), task.id});
-            LOG_INFO("Pushed result to output queue, id={}, results={}", task.id, results.size());
+        LOG_INFO("Submitting {} crops for async recognition, id={}", crops.size(), task.id);
+
+        // Submit all crops for async recognition
+        for (size_t i = 0; i < crops.size(); ++i) {
+            // Create per-crop context (will be deleted by callback)
+            RecognitionCropContext* cropCtx = new RecognitionCropContext{taskCtx, i};
+            recognizer_->RecognizeAsync(taskCtx->crops[i], cropCtx);  // Use cloned crop from context
+        }
+    }
+}
+
+void OCRPipeline::onRecognitionComplete(const std::string& text, float confidence, void* userArg) {
+    RecognitionCropContext* cropCtx = static_cast<RecognitionCropContext*>(userArg);
+    if (!cropCtx) {
+        LOG_ERROR("Recognition callback: null crop context");
+        return;
+    }
+
+    // Take ownership of crop context
+    std::unique_ptr<RecognitionCropContext> cropCtxGuard(cropCtx);
+    
+    auto& taskCtx = cropCtx->taskCtx;
+    size_t idx = cropCtx->cropIndex;
+
+    // Update result for this crop
+    {
+        std::lock_guard<std::mutex> lock(taskCtx->resultMutex);
+        taskCtx->results[idx].text = text;
+        taskCtx->results[idx].confidence = confidence;
+    }
+
+    // Decrement pending count
+    int remaining = taskCtx->pendingCount.fetch_sub(1) - 1;
+    
+    LOG_DEBUG("Recognition complete for crop {} of task {}, remaining={}, text='{}'",
+              idx, taskCtx->taskId, remaining, text.empty() ? "<empty>" : text.substr(0, 20));
+
+    // If all crops done, finalize and output
+    if (remaining == 0) {
+        // Collect valid results (non-empty text)
+        std::vector<PipelineOCRResult> validResults;
+        validResults.reserve(taskCtx->results.size());
+        
+        for (const auto& res : taskCtx->results) {
+            if (!res.text.empty()) {
+                validResults.push_back(res);
+            }
+        }
+
+        // Sort results
+        if (config_.sortResults && !validResults.empty()) {
+            sortOCRResults(validResults);
+            for (size_t i = 0; i < validResults.size(); ++i) {
+                validResults[i].index = static_cast<int>(i);
+            }
+        }
+
+        // Push to output queue (use try_push to avoid deadlock)
+        if (outQueue_ && running_) {
+            size_t resultCount = validResults.size();  // Save before move
+            while (running_ && !outQueue_->try_push({std::move(validResults), taskCtx->processedImage, taskCtx->taskId}, 
+                                                     std::chrono::milliseconds(500))) {
+                LOG_WARN("Output queue full, waiting... id={}", taskCtx->taskId);
+            }
+            if (running_) {
+                LOG_INFO("Pushed result to output queue, id={}, results={}", 
+                         taskCtx->taskId, resultCount);
+            }
         }
     }
 }

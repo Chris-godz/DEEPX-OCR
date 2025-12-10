@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14)
-project(DeepXOCR VERSION 0.1 LANGUAGES CXX)
+project(DeepXOCR VERSION 0.2 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -48,8 +48,10 @@ elseif(ENABLE_DEBUG_INFO)
     add_compile_options(-g -rdynamic -fno-omit-frame-pointer)
 endif()
 
-# Find OpenCV
-find_package(OpenCV REQUIRED)
+# ========================================
+# OpenCV Configuration
+# ========================================
+include(cmake/BuildOpenCV.cmake)
 
 # Add 3rd-party libraries
 add_subdirectory(3rd-party/json)
