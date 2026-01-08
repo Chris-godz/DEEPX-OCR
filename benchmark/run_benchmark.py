@@ -16,7 +16,7 @@ def run_cpp_benchmark(runs_per_image=3, model_type='server'):
     print("Running C++ OCR Benchmark...")
     print("="*60)
     
-    project_root = Path(__file__).parent.parent
+    project_root = Path(__file__).resolve().parent.parent
     benchmark_exe = project_root / "build_Release" / "bin" / "benchmark"
     
     if not benchmark_exe.exists():
@@ -34,7 +34,7 @@ def run_cpp_benchmark(runs_per_image=3, model_type='server'):
 
 def run_accuracy_calculation(results_dir):
     """Run Python accuracy calculation script"""
-    project_root = Path(__file__).parent.parent
+    project_root = Path(__file__).resolve().parent.parent
     calc_script = project_root / "benchmark" / "calculate_acc.py"
     
     if not calc_script.exists():
@@ -185,7 +185,7 @@ def main():
     parser.add_argument('--model', default='server', choices=['server', 'mobile'], help='Model type (default: server)')
     args = parser.parse_args()
     
-    project_root = Path(__file__).parent.parent
+    project_root = Path(__file__).resolve().parent.parent
     results_dir = project_root / "benchmark" / f"results_{args.model}"
     
     # 1. 运行C++benchmark (if not skipped)
