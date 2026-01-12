@@ -149,7 +149,9 @@ python3 benchmark/run_benchmark.py --model mobile
 
 ### 📊 Benchmark Reports (Summary)
 
-**Test Configuration** (from `docs/result/` reports):
+#### x86 Platform
+
+**Test Configuration** (from `docs/result/x86/` reports):
 - Model: PP-OCR v5 (DEEPX NPU acceleration)
 - Dataset Size: 20 images
 - Success Rate: 100% (20/20)
@@ -171,9 +173,30 @@ python3 benchmark/run_benchmark.py --model mobile
 **Detailed Reports**:
 | Setup | Server | Mobile |
 |---|---|---|
-| Single Card | [Report](docs/result/DXNN-OCR_benchmark_report_singlecard_server.md) | [Report](docs/result/DXNN-OCR_benchmark_report_singlecard_mobile.md) |
-| Dual Cards | [Report](docs/result/DXNN-OCR_benchmark_report_dualcards_server.md) | [Report](docs/result/DXNN-OCR_benchmark_report_dualcards_mobile.md) |
-| Three Cards | [Report](docs/result/DXNN-OCR_benchmark_report_threecards_server.md) | [Report](docs/result/DXNN-OCR_benchmark_report_threecards_mobile.md) |
+| Single Card | [Report](docs/result/x86/DXNN-OCR_benchmark_report_singlecard_server.md) | [Report](docs/result/x86/DXNN-OCR_benchmark_report_singlecard_mobile.md) |
+| Dual Cards | [Report](docs/result/x86/DXNN-OCR_benchmark_report_dualcards_server.md) | [Report](docs/result/x86/DXNN-OCR_benchmark_report_dualcards_mobile.md) |
+| Three Cards | [Report](docs/result/x86/DXNN-OCR_benchmark_report_threecards_server.md) | [Report](docs/result/x86/DXNN-OCR_benchmark_report_threecards_mobile.md) |
+
+---
+
+#### ARM Platform (Rockchip aarch64)
+
+**Test Configuration** (from `docs/result/arm/` reports):
+- Model: PP-OCR v5 (DEEPX NPU acceleration)
+- Dataset Size: 20 images
+- Success Rate: 100% (20/20)
+
+**Performance Summary**:
+| Model | Avg Inference Time (ms) | Avg FPS | Avg CPS (chars/s) | Avg Character Accuracy |
+|---|---:|---:|---:|---:|
+| Server | 133.88 | 7.47 | 245.74 | 96.82% |
+| Mobile | 60.00 | 16.67 | 524.96 | 89.37% |
+
+**Detailed Reports**:
+| Model | Report |
+|---|---|
+| Server | [Report](docs/result/arm/DXNN-OCR_benchmark_report_server.md) |
+| Mobile | [Report](docs/result/arm/DXNN-OCR_benchmark_report_mobile.md) |
 
 <details>
 <summary><b>🔄 Reproduce Benchmark Results</b></summary>

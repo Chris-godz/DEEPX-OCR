@@ -149,7 +149,9 @@ python3 benchmark/run_benchmark.py --model mobile
 
 ### 📊 基准测试报告（汇总）
 
-**测试配置**（来源：`docs/result/` 报告）：
+#### x86 平台
+
+**测试配置**（来源：`docs/result/x86/` 报告）：
 - 模型：PP-OCR v5（DEEPX NPU 加速）
 - 数据集规模：20 张图片
 - 成功率：100%（20/20）
@@ -171,9 +173,30 @@ python3 benchmark/run_benchmark.py --model mobile
 **详细报告**：
 | 配置 | Server | Mobile |
 |---|---|---|
-| 单卡 | [Report](docs/result/DXNN-OCR_benchmark_report_singlecard_server.md) | [Report](docs/result/DXNN-OCR_benchmark_report_singlecard_mobile.md) |
-| 双卡 | [Report](docs/result/DXNN-OCR_benchmark_report_dualcards_server.md) | [Report](docs/result/DXNN-OCR_benchmark_report_dualcards_mobile.md) |
-| 三卡 | [Report](docs/result/DXNN-OCR_benchmark_report_threecards_server.md) | [Report](docs/result/DXNN-OCR_benchmark_report_threecards_mobile.md) |
+| 单卡 | [Report](docs/result/x86/DXNN-OCR_benchmark_report_singlecard_server.md) | [Report](docs/result/x86/DXNN-OCR_benchmark_report_singlecard_mobile.md) |
+| 双卡 | [Report](docs/result/x86/DXNN-OCR_benchmark_report_dualcards_server.md) | [Report](docs/result/x86/DXNN-OCR_benchmark_report_dualcards_mobile.md) |
+| 三卡 | [Report](docs/result/x86/DXNN-OCR_benchmark_report_threecards_server.md) | [Report](docs/result/x86/DXNN-OCR_benchmark_report_threecards_mobile.md) |
+
+---
+
+#### ARM 平台（Rockchip aarch64）
+
+**测试配置**（来源：`docs/result/arm/` 报告）：
+- 模型：PP-OCR v5（DEEPX NPU 加速）
+- 数据集规模：20 张图片
+- 成功率：100%（20/20）
+
+**性能汇总**：
+| 模型 | 平均推理耗时 (ms) | 平均 FPS | 平均 CPS（字符/秒） | 平均字符准确率 |
+|---|---:|---:|---:|---:|
+| Server | 133.88 | 7.47 | 245.74 | 96.82% |
+| Mobile | 60.00 | 16.67 | 524.96 | 89.37% |
+
+**详细报告**：
+| 模型 | 报告 |
+|---|---|
+| Server | [Report](docs/result/arm/DXNN-OCR_benchmark_report_server.md) |
+| Mobile | [Report](docs/result/arm/DXNN-OCR_benchmark_report_mobile.md) |
 
 <details>
 <summary><b>🔄 复现基准测试结果</b></summary>
