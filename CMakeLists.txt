@@ -62,6 +62,11 @@ add_subdirectory(3rd-party/spdlog)
 # Suppress warnings from 3rd-party libraries
 set(CMAKE_CXX_FLAGS_BACKUP "${CMAKE_CXX_FLAGS}")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -w")  # Disable all warnings
+
+# 关闭 clipper2 的测试和示例编译，避免 gtest pthread 链接问题
+set(CLIPPER2_TESTS OFF CACHE BOOL "" FORCE)
+set(CLIPPER2_EXAMPLES OFF CACHE BOOL "" FORCE)
+
 add_subdirectory(3rd-party/clipper2/CPP)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS_BACKUP}")
 
