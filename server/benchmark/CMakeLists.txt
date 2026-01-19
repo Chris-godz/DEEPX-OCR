@@ -1,4 +1,8 @@
 # Server API Benchmark CMakeLists.txt
+# 
+# 高并发压力测试工具 (C++)
+# PDF benchmark 现在由 Python 脚本 run_pdf_benchmark.py 处理
+#
 cmake_minimum_required(VERSION 3.15)
 
 # 查找必需的依赖
@@ -34,4 +38,4 @@ set_target_properties(api_benchmark PROPERTIES
 )
 
 # 打印信息
-message(STATUS "API Benchmark executable: api_benchmark")
+message(STATUS "API Benchmark (Stress Test) executable: api_benchmark")

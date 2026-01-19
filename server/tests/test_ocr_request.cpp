@@ -198,6 +198,37 @@ TEST(OCRRequestFromJson, TextRecScoreThreshParam) {
     EXPECT_DOUBLE_EQ(req.textRecScoreThresh, 0.5);
 }
 
+/**
+ * @brief 测试 PDF 参数解析
+ */
+TEST(OCRRequestFromJson, PDFParameters) {
+    json j;
+    j["file"] = "test_pdf_base64";
+    j["fileType"] = 0;
+    j["pdfDpi"] = 200;
+    j["pdfMaxPages"] = 5;
+    
+    OCRRequest req = OCRRequest::FromJson(j);
+    
+    EXPECT_EQ(req.fileType, 0);
+    EXPECT_EQ(req.pdfDpi, 200);
+    EXPECT_EQ(req.pdfMaxPages, 5);
+}
+
+/**
+ * @brief 测试 PDF 参数默认值
+ */
+TEST(OCRRequestFromJson, PDFParametersDefault) {
+    json j;
+    j["file"] = "test";
+    j["fileType"] = 0;
+    
+    OCRRequest req = OCRRequest::FromJson(j);
+    
+    EXPECT_EQ(req.pdfDpi, 150);       // 默认 150
+    EXPECT_EQ(req.pdfMaxPages, 10);   // 默认 10
+}
+
 // ==================== OCRRequest::Validate 测试 ====================
 
 /**
@@ -213,16 +244,90 @@ TEST(OCRRequestValidate, EmptyFile) {
 }
 
 /**
- * @brief 测试不支持的 fileType (PDF)
+ * @brief 测试 PDF fileType 现已支持
  */
-TEST(OCRRequestValidate, UnsupportedFileType) {
+TEST(OCRRequestValidate, PDFFileTypeSupported) {
     OCRRequest req;
     req.file = "test_data";
-    req.fileType = 0;  // PDF - 未实现
+    req.fileType = 0;  // PDF - 已实现
+    
+    std::string error_msg;
+    EXPECT_TRUE(req.Validate(error_msg));  // PDF 现在是有效的
+    EXPECT_TRUE(error_msg.empty());
+}
+
+/**
+ * @brief 测试无效的 fileType 值
+ */
+TEST(OCRRequestValidate, InvalidFileType) {
+    OCRRequest req;
+    req.file = "test_data";
+    req.fileType = 2;  // 无效值
     
     std::string error_msg;
     EXPECT_FALSE(req.Validate(error_msg));
-    EXPECT_EQ(error_msg, "Unsupported fileType: PDF is not implemented (fileType=0)");
+    EXPECT_EQ(error_msg, "fileType must be 0 (PDF) or 1 (Image)");
+}
+
+/**
+ * @brief 测试 PDF DPI 参数验证
+ */
+TEST(OCRRequestValidate, PDFDpiRange) {
+    OCRRequest req;
+    req.file = "test_data";
+    req.fileType = 0;  // PDF
+    
+    std::string error_msg;
+    
+    // 有效范围
+    req.pdfDpi = 72;
+    EXPECT_TRUE(req.Validate(error_msg));
+    
+    req.pdfDpi = 150;
+    EXPECT_TRUE(req.Validate(error_msg));
+    
+    req.pdfDpi = 300;
+    EXPECT_TRUE(req.Validate(error_msg));
+    
+    // 超出范围
+    req.pdfDpi = 50;
+    EXPECT_FALSE(req.Validate(error_msg));
+    EXPECT_EQ(error_msg, "pdfDpi must be in range [72, 300]");
+    
+    req.pdfDpi = 400;
+    EXPECT_FALSE(req.Validate(error_msg));
+    EXPECT_EQ(error_msg, "pdfDpi must be in range [72, 300]");
+}
+
+/**
+ * @brief 测试 PDF 最大页数参数验证
+ */
+TEST(OCRRequestValidate, PDFMaxPagesRange) {
+    OCRRequest req;
+    req.file = "test_data";
+    req.fileType = 0;  // PDF
+    req.pdfDpi = 150;
+    
+    std::string error_msg;
+    
+    // 有效范围
+    req.pdfMaxPages = 1;
+    EXPECT_TRUE(req.Validate(error_msg));
+    
+    req.pdfMaxPages = 50;
+    EXPECT_TRUE(req.Validate(error_msg));
+    
+    req.pdfMaxPages = 100;
+    EXPECT_TRUE(req.Validate(error_msg));
+    
+    // 超出范围
+    req.pdfMaxPages = 0;
+    EXPECT_FALSE(req.Validate(error_msg));
+    EXPECT_EQ(error_msg, "pdfMaxPages must be in range [1, 100]");
+    
+    req.pdfMaxPages = 101;
+    EXPECT_FALSE(req.Validate(error_msg));
+    EXPECT_EQ(error_msg, "pdfMaxPages must be in range [1, 100]");
 }
 
 /**

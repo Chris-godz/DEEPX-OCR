@@ -28,6 +28,10 @@ OCRRequest OCRRequest::FromJson(const json& j) {
     if (j.contains("textRecScoreThresh")) req.textRecScoreThresh = j["textRecScoreThresh"].get<double>();
     if (j.contains("visualize")) req.visualize = j["visualize"].get<bool>();
     
+    // PDF 专用参数
+    if (j.contains("pdfDpi")) req.pdfDpi = j["pdfDpi"].get<int>();
+    if (j.contains("pdfMaxPages")) req.pdfMaxPages = j["pdfMaxPages"].get<int>();
+    
     return req;
 }
 
@@ -38,10 +42,31 @@ bool OCRRequest::Validate(std::string& error_msg) const {
         return false;
     }
     
-    // 检查fileType
-    if (fileType != 1) {
-        error_msg = "Unsupported fileType: PDF is not implemented (fileType=0)";
+    // 检查fileType（现在支持 PDF）
+    if (fileType != 0 && fileType != 1) {
+        error_msg = "fileType must be 0 (PDF) or 1 (Image)";
         return false;
+    }
+    
+    // PDF 参数验证
+    if (fileType == 0) {
+        // DPI 限制 [72, 300]
+        if (pdfDpi < 72 || pdfDpi > 300) {
+            error_msg = "pdfDpi must be in range [72, 300]";
+            return false;
+        }
+        
+        // 页数限制 [1, 100]
+        if (pdfMaxPages < 1 || pdfMaxPages > 100) {
+            error_msg = "pdfMaxPages must be in range [1, 100]";
+            return false;
+        }
+        
+        // 内存预估警告（A4 @ 150 DPI ~= 8.7MB/页）
+        if (pdfMaxPages > 10 && pdfDpi > 150) {
+            LOG_WARN("High memory usage expected: {} pages at {} DPI", 
+                     pdfMaxPages, pdfDpi);
+        }
     }
     
     // textDetLimitSideLen 和 textDetLimitType: 接收但不实际使用，只做基本验证
@@ -155,6 +180,59 @@ bool OCRHandler::WaitForResult(int64_t task_id, std::vector<ocr::PipelineOCRResu
     }
 }
 
+int64_t OCRHandler::GenerateTaskId() {
+    static std::atomic<int64_t> task_counter{0};
+    return ++task_counter;
+}
+
+std::string OCRHandler::SaveVisualization(const cv::Mat& image, 
+                                           const std::vector<ocr::PipelineOCRResult>& results,
+                                           int pageIndex) {
+    if (image.empty()) return "";
+    
+    // 将 PipelineOCRResult 转换为 TextBox 以便使用 Visualizer
+    std::vector<ocr::TextBox> text_boxes;
+    for (const auto& result : results) {
+        ocr::TextBox box;
+        for (size_t i = 0; i < 4 && i < result.box.size(); ++i) {
+            box.points[i] = result.box[i];
+        }
+        box.text = result.text;
+        box.confidence = result.confidence;
+        box.rotated = false;
+        text_boxes.push_back(box);
+    }
+    
+    // 使用可视化器生成带框的图像
+    cv::Mat vis_image = ocr::Visualizer::drawOCRResults(image, text_boxes, true, true);
+    
+    // 生成文件名（支持页码后缀）
+    std::string vis_filename;
+    if (pageIndex >= 0) {
+        // PDF 多页模式：添加页码后缀
+        auto now = std::chrono::system_clock::now();
+        auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now.time_since_epoch()).count();
+        vis_filename = fmt::format("ocr_vis_{}_page{}.jpg", timestamp, pageIndex);
+        
+        std::string full_path = vis_output_dir_ + "/" + vis_filename;
+        if (cv::imwrite(full_path, vis_image)) {
+            LOG_INFO("Visualization image saved: {}", full_path);
+        } else {
+            LOG_ERROR("Failed to save visualization image: {}", full_path);
+            return "";
+        }
+    } else {
+        // 单图模式：使用 FileHandler
+        vis_filename = FileHandler::SaveVisualizationImage(vis_image, vis_output_dir_);
+    }
+    
+    if (!vis_filename.empty()) {
+        return vis_url_prefix_ + "/" + vis_filename;
+    }
+    return "";
+}
+
 ocr::OCRPipelineConfig OCRHandler::CreatePipelineConfig(const OCRRequest& request) const {
     ocr::OCRPipelineConfig config = base_config_;
     
@@ -218,122 +296,26 @@ int OCRHandler::HandleRequest(const OCRRequest& request, json& response_json) {
             return 400;
         }
         
-        // 2. 加载输入图像
-        cv::Mat image;
-        if (!LoadInputImage(request, image, error_msg)) {
-            LOG_ERROR("Failed to load image: {}", error_msg);
-            response_json = JsonResponseBuilder::BuildErrorResponse(
-                ErrorCode::INVALID_PARAMETER, error_msg);
-            return 400;
-        }
-        
-        LOG_INFO("Input image loaded: {}x{}", image.cols, image.rows);
-        
-        // 使用全局共享的 pipeline，避免每次请求都创建新实例
-        // 如果 pipeline 未初始化，则初始化一次
+        // 2. 确保 pipeline 已初始化（全局一次）
         static std::once_flag init_flag;
         std::call_once(init_flag, [this]() {
             if (!base_pipeline_->initialize()) {
                 LOG_ERROR("Failed to initialize base pipeline");
                 throw std::runtime_error("Failed to initialize OCR pipeline");
             }
-            base_pipeline_->start();  // 启动后保持运行
+            base_pipeline_->start();
             LOG_INFO("Base pipeline initialized and started");
-            
-            // 启动结果收集线程（解决并发结果错位问题）
             StartResultCollector();
         });
         
-        // 从 OCRRequest 构建 OCRTaskConfig（实现参数解耦）
-        ocr::OCRTaskConfig taskConfig;
-        taskConfig.useDocOrientationClassify = request.useDocOrientationClassify;
-        taskConfig.useDocUnwarping = request.useDocUnwarping;
-        taskConfig.useTextlineOrientation = request.useTextlineOrientation;
-        taskConfig.textDetThresh = static_cast<float>(request.textDetThresh);
-        taskConfig.textDetBoxThresh = static_cast<float>(request.textDetBoxThresh);
-        taskConfig.textDetUnclipRatio = static_cast<float>(request.textDetUnclipRatio);
-        taskConfig.textRecScoreThresh = static_cast<float>(request.textRecScoreThresh);
-        
-        LOG_INFO("OCRTaskConfig: docOri={}, docUnwarp={}, textlineOri={}, detThresh={:.2f}, boxThresh={:.2f}, unclipRatio={:.2f}, recThresh={:.2f}",
-                 taskConfig.useDocOrientationClassify, taskConfig.useDocUnwarping,
-                 taskConfig.useTextlineOrientation, taskConfig.textDetThresh,
-                 taskConfig.textDetBoxThresh, taskConfig.textDetUnclipRatio, taskConfig.textRecScoreThresh);
-        
-        // 提交任务到共享 pipeline（使用新的带配置的接口）
-        static std::atomic<int64_t> task_counter{0};
-        int64_t task_id = ++task_counter;
-        
-        // #region agent log
-        LOG_INFO("[DEBUG] Pushing task_id={}", task_id);
-        // #endregion
-        
-        if (!base_pipeline_->pushTask(image, task_id, taskConfig)) {
-            LOG_ERROR("Failed to push task to pipeline");
-
-            response_json = JsonResponseBuilder::BuildErrorResponse(
-                ErrorCode::INTERNAL_ERROR, "Pipeline queue is full");
-            return 503;
+        // 3. 根据 fileType 分流处理
+        if (request.fileType == 0) {
+            // PDF 处理路径
+            return HandlePDFRequest(request, response_json);
+        } else {
+            // 图像处理路径
+            return HandleImageRequest(request, response_json);
         }
-        
-        // 使用 WaitForResult 等待正确的结果（支持并发）
-        std::vector<ocr::PipelineOCRResult> results;
-        cv::Mat processed_image;
-        
-        LOG_INFO("Waiting for OCR results for task_id={}...", task_id);
-        
-        if (!WaitForResult(task_id, results, processed_image, 10000)) {
-            LOG_ERROR("Failed to get OCR results for task_id={} (timeout)", task_id);
-            response_json = JsonResponseBuilder::BuildErrorResponse(
-                ErrorCode::INTERNAL_ERROR, "Failed to get OCR results or timeout");
-            return 500;
-        }
-        
-        bool success = true;
-        
-        if (!success) {
-            LOG_ERROR("OCR pipeline execution failed");
-            response_json = JsonResponseBuilder::BuildErrorResponse(
-                ErrorCode::INTERNAL_ERROR, "OCR processing failed");
-            return 500;
-        }
-        
-        LOG_INFO("OCR completed: {} text boxes detected", results.size());
-        
-        // 5. 保存可视化图像（如果启用）
-        std::string vis_url;
-        LOG_INFO("Starting visualization check, visualize={}", request.visualize);
-        if (request.visualize && !processed_image.empty()) {
-            // 将PipelineOCRResult转换为TextBox以便使用Visualizer
-            std::vector<ocr::TextBox> text_boxes;
-            for (const auto& result : results) {
-                ocr::TextBox box;
-                // 复制4个顶点坐标
-                for (size_t i = 0; i < 4 && i < result.box.size(); ++i) {
-                    box.points[i] = result.box[i];
-                }
-                box.text = result.text;
-                box.confidence = result.confidence;
-                box.rotated = false;
-                text_boxes.push_back(box);
-            }
-            
-            // 使用可视化器生成带框的图像
-            cv::Mat vis_image = ocr::Visualizer::drawOCRResults(
-                processed_image, text_boxes, true, true);
-            
-            std::string vis_filename = FileHandler::SaveVisualizationImage(vis_image, vis_output_dir_);
-            if (!vis_filename.empty()) {
-                vis_url = vis_url_prefix_ + "/" + vis_filename;
-                LOG_INFO("Visualization image saved: {}", vis_url);
-            }
-        }
-        
-        // 6. 构建成功响应
-        LOG_INFO("Building success response...");
-        response_json = JsonResponseBuilder::BuildSuccessResponse(results, vis_url);
-        LOG_INFO("Success response built successfully");
-        
-        return 200;
         
     } catch (const json::exception& e) {
         LOG_ERROR("JSON parsing error: {}", e.what());
@@ -352,6 +334,199 @@ int OCRHandler::HandleRequest(const OCRRequest& request, json& response_json) {
             ErrorCode::INTERNAL_ERROR, "Internal error: unknown exception");
         return 500;
     }
+}
+
+int OCRHandler::HandleImageRequest(const OCRRequest& request, json& response_json) {
+    // 1. 加载输入图像
+    std::string error_msg;
+    cv::Mat image;
+    if (!LoadInputImage(request, image, error_msg)) {
+        LOG_ERROR("Failed to load image: {}", error_msg);
+        response_json = JsonResponseBuilder::BuildErrorResponse(
+            ErrorCode::INVALID_PARAMETER, error_msg);
+        return 400;
+    }
+    
+    LOG_INFO("Input image loaded: {}x{}", image.cols, image.rows);
+    
+    // 2. 构建 OCR 任务配置
+    ocr::OCRTaskConfig taskConfig;
+    taskConfig.useDocOrientationClassify = request.useDocOrientationClassify;
+    taskConfig.useDocUnwarping = request.useDocUnwarping;
+    taskConfig.useTextlineOrientation = request.useTextlineOrientation;
+    taskConfig.textDetThresh = static_cast<float>(request.textDetThresh);
+    taskConfig.textDetBoxThresh = static_cast<float>(request.textDetBoxThresh);
+    taskConfig.textDetUnclipRatio = static_cast<float>(request.textDetUnclipRatio);
+    taskConfig.textRecScoreThresh = static_cast<float>(request.textRecScoreThresh);
+    
+    LOG_INFO("OCRTaskConfig: docOri={}, docUnwarp={}, textlineOri={}, detThresh={:.2f}, boxThresh={:.2f}, unclipRatio={:.2f}, recThresh={:.2f}",
+             taskConfig.useDocOrientationClassify, taskConfig.useDocUnwarping,
+             taskConfig.useTextlineOrientation, taskConfig.textDetThresh,
+             taskConfig.textDetBoxThresh, taskConfig.textDetUnclipRatio, taskConfig.textRecScoreThresh);
+    
+    // 3. 提交任务到 pipeline
+    int64_t task_id = GenerateTaskId();
+    LOG_INFO("[DEBUG] Pushing task_id={}", task_id);
+    
+    if (!base_pipeline_->pushTask(image, task_id, taskConfig)) {
+        LOG_ERROR("Failed to push task to pipeline");
+        response_json = JsonResponseBuilder::BuildErrorResponse(
+            ErrorCode::INTERNAL_ERROR, "Pipeline queue is full");
+        return 503;
+    }
+    
+    // 4. 等待结果
+    std::vector<ocr::PipelineOCRResult> results;
+    cv::Mat processed_image;
+    
+    LOG_INFO("Waiting for OCR results for task_id={}...", task_id);
+    
+    if (!WaitForResult(task_id, results, processed_image, 10000)) {
+        LOG_ERROR("Failed to get OCR results for task_id={} (timeout)", task_id);
+        response_json = JsonResponseBuilder::BuildErrorResponse(
+            ErrorCode::INTERNAL_ERROR, "Failed to get OCR results or timeout");
+        return 500;
+    }
+    
+    LOG_INFO("OCR completed: {} text boxes detected", results.size());
+    
+    // 5. 保存可视化图像（如果启用）
+    std::string vis_url;
+    if (request.visualize && !processed_image.empty()) {
+        vis_url = SaveVisualization(processed_image, results);
+        if (!vis_url.empty()) {
+            LOG_INFO("Visualization image saved: {}", vis_url);
+        }
+    }
+    
+    // 6. 构建成功响应
+    response_json = JsonResponseBuilder::BuildSuccessResponse(results, vis_url);
+    return 200;
+}
+
+int OCRHandler::HandlePDFRequest(const OCRRequest& request, json& response_json) {
+    LOG_INFO("Processing PDF request: dpi={}, maxPages={}", request.pdfDpi, request.pdfMaxPages);
+    
+    // 1. 构建 PDF 渲染配置
+    PDFRenderConfig pdfConfig;
+    pdfConfig.dpi = request.pdfDpi;
+    pdfConfig.maxPages = request.pdfMaxPages;
+    pdfConfig.maxDpi = 300;  // 硬限制
+    
+    // 2. 渲染 PDF 所有页面（内部已并行）
+    PDFRenderResult renderResult;
+    bool isURL = (request.file.find("http://") == 0 || request.file.find("https://") == 0);
+    
+    if (isURL) {
+        LOG_INFO("Rendering PDF from URL...");
+        renderResult = pdf_handler_.RenderFromURL(request.file, pdfConfig);
+    } else {
+        LOG_INFO("Rendering PDF from Base64...");
+        renderResult = pdf_handler_.RenderFromBase64(request.file, pdfConfig);
+    }
+    
+    // 3. 检查 PDF 渲染错误
+    if (!renderResult.success && renderResult.pages.empty()) {
+        LOG_ERROR("PDF rendering failed: {}", renderResult.errorMsg);
+        response_json = JsonResponseBuilder::BuildErrorResponse(
+            renderResult.errorCode, renderResult.errorMsg);
+        return PDFHandler::GetHttpStatusCode(renderResult.errorCode);
+    }
+    
+    LOG_INFO("PDF rendered: {} pages (total: {})", 
+             renderResult.renderedPages, renderResult.totalPages);
+    
+    // 4. 构建 OCR 任务配置
+    ocr::OCRTaskConfig taskConfig;
+    taskConfig.useDocOrientationClassify = request.useDocOrientationClassify;
+    taskConfig.useDocUnwarping = request.useDocUnwarping;
+    taskConfig.useTextlineOrientation = request.useTextlineOrientation;
+    taskConfig.textDetThresh = static_cast<float>(request.textDetThresh);
+    taskConfig.textDetBoxThresh = static_cast<float>(request.textDetBoxThresh);
+    taskConfig.textDetUnclipRatio = static_cast<float>(request.textDetUnclipRatio);
+    taskConfig.textRecScoreThresh = static_cast<float>(request.textRecScoreThresh);
+    
+    // 5. 并行提交所有页面到 OCR pipeline
+    struct PageTask {
+        int64_t taskId;
+        int pageIndex;
+    };
+    std::vector<PageTask> submittedTasks;
+    
+    for (const auto& page : renderResult.pages) {
+        if (!page.success) {
+            LOG_WARN("Skipping failed page {}", page.pageIndex);
+            continue;
+        }
+        
+        int64_t taskId = GenerateTaskId();
+        
+        if (base_pipeline_->pushTask(page.image, taskId, taskConfig)) {
+            submittedTasks.push_back({taskId, page.pageIndex});
+            LOG_DEBUG("Submitted page {} as task_id={}", page.pageIndex, taskId);
+        } else {
+            LOG_ERROR("Failed to submit page {} to pipeline (queue full)", page.pageIndex);
+        }
+    }
+    
+    // 6. 等待所有结果
+    std::map<int, json> pageResults;      // pageIndex -> ocrResults
+    std::map<int, std::string> pageVisUrls; // pageIndex -> vis_url
+    
+    for (const auto& task : submittedTasks) {
+        std::vector<ocr::PipelineOCRResult> ocrResults;
+        cv::Mat processedImage;
+        
+        if (WaitForResult(task.taskId, ocrResults, processedImage, 30000)) {
+            // 构建该页的 OCR 结果 JSON
+            json ocrResultsJson = json::array();
+            for (const auto& r : ocrResults) {
+                ocrResultsJson.push_back(JsonResponseBuilder::ConvertOCRResultToJson(r));
+            }
+            pageResults[task.pageIndex] = ocrResultsJson;
+            
+            LOG_INFO("Page {} OCR completed: {} text boxes", task.pageIndex, ocrResults.size());
+            
+            // 可视化（如果启用）
+            if (request.visualize && !processedImage.empty()) {
+                std::string visUrl = SaveVisualization(processedImage, ocrResults, task.pageIndex);
+                if (!visUrl.empty()) {
+                    pageVisUrls[task.pageIndex] = visUrl;
+                }
+            }
+        } else {
+            LOG_ERROR("Timeout waiting for page {} (task_id={})", task.pageIndex, task.taskId);
+            pageResults[task.pageIndex] = json::array();  // 空结果
+        }
+    }
+    
+    // 7. 按页码顺序组装响应
+    json pagesArray = json::array();
+    for (int i = 0; i < renderResult.renderedPages; ++i) {
+        json pageJson;
+        pageJson["pageIndex"] = i;
+        pageJson["ocrResults"] = pageResults.count(i) ? pageResults[i] : json::array();
+        
+        if (pageVisUrls.count(i)) {
+            pageJson["ocrImage"] = pageVisUrls[i];
+        }
+        
+        // 如果该页渲染失败，添加错误信息
+        if (i < static_cast<int>(renderResult.pages.size()) && !renderResult.pages[i].success) {
+            pageJson["error"] = renderResult.pages[i].errorMsg;
+        }
+        
+        pagesArray.push_back(pageJson);
+    }
+    
+    // 8. 构建最终响应
+    response_json = JsonResponseBuilder::BuildPDFSuccessResponse(
+        pagesArray, 
+        renderResult.totalPages, 
+        renderResult.renderedPages);
+    
+    LOG_INFO("PDF OCR completed: {} pages processed", renderResult.renderedPages);
+    return 200;
 }
 
 } // namespace ocr_server

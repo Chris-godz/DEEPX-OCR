@@ -3,6 +3,7 @@
 #include "pipeline/ocr_pipeline.h"
 #include "file_handler.h"
 #include "json_response.h"
+#include "pdf_handler.h"
 #include <nlohmann/json.hpp>
 #include <opencv2/opencv.hpp>
 #include <memory>
@@ -22,7 +23,7 @@ namespace ocr_server {
  */
 struct OCRRequest {
     std::string file;                       // Base64编码或URL
-    int fileType = 1;                       // 1: 图像, 0: PDF(未实现)
+    int fileType = 1;                       // 1: 图像, 0: PDF
     bool useDocOrientationClassify = false; // 文档方向矫正
     bool useDocUnwarping = false;           // 图片扭曲矫正
     bool useTextlineOrientation = false;    // 文本行方向矫正
@@ -33,6 +34,10 @@ struct OCRRequest {
     double textDetUnclipRatio = 1.5;        // 检测扩张系数
     double textRecScoreThresh = 0.0;        // 识别置信度阈值
     bool visualize = false;                 // 是否开启可视化
+    
+    // PDF 专用参数 (参考 PaddleOCR 默认值)
+    int pdfDpi = 150;                       // PDF 渲染 DPI (默认 150)
+    int pdfMaxPages = 10;                   // 最大处理页数 (默认 10)
     
     /**
      * @brief 从JSON解析请求参数
@@ -102,6 +107,35 @@ private:
     void ResultCollectorLoop();                         // 结果收集循环
     bool WaitForResult(int64_t task_id, std::vector<ocr::PipelineOCRResult>& results, 
                        cv::Mat& processedImage, int timeout_ms = 10000);
+    
+    // ==================== PDF 处理相关 ====================
+    
+    PDFHandler pdf_handler_;                            // PDF 处理器
+    
+    /**
+     * @brief 处理 PDF OCR 请求（并行提交到 pipeline）
+     */
+    int HandlePDFRequest(const OCRRequest& request, json& response_json);
+    
+    /**
+     * @brief 处理图像 OCR 请求（原 HandleRequest 逻辑）
+     */
+    int HandleImageRequest(const OCRRequest& request, json& response_json);
+    
+    /**
+     * @brief 生成唯一任务 ID
+     */
+    static int64_t GenerateTaskId();
+    
+    /**
+     * @brief 保存可视化图片并返回 URL
+     * @param image 处理后的图像
+     * @param results OCR 结果
+     * @param pageIndex 页码 (-1 表示非 PDF)
+     */
+    std::string SaveVisualization(const cv::Mat& image, 
+                                   const std::vector<ocr::PipelineOCRResult>& results,
+                                   int pageIndex = -1);
 };
 
 } // namespace ocr_server

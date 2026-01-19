@@ -177,21 +177,24 @@ bool OCRPipeline::initialize() {
                 }
             }
             
-            // Sort Boxes
-            std::sort(boxes.begin(), boxes.end(), [](const DeepXOCR::TextBox& a, const DeepXOCR::TextBox& b) {
-                if (std::abs(a.points[0].y - b.points[0].y) < 1.0f) {
-                    return a.points[0].x < b.points[0].x;
-                }
-                return a.points[0].y < b.points[0].y;
-            });
-            
-            for (size_t i = 0; i < boxes.size() - 1; ++i) {
-                for (int j = i; j >= 0; --j) {
-                    if (std::abs(boxes[j + 1].points[0].y - boxes[j].points[0].y) < 10.0f &&
-                        boxes[j + 1].points[0].x < boxes[j].points[0].x) {
-                        std::swap(boxes[j], boxes[j + 1]);
-                    } else {
-                        break;
+            // Sort Boxes (only if there are boxes to sort)
+            if (boxes.size() > 1) {
+                std::sort(boxes.begin(), boxes.end(), [](const DeepXOCR::TextBox& a, const DeepXOCR::TextBox& b) {
+                    if (std::abs(a.points[0].y - b.points[0].y) < 1.0f) {
+                        return a.points[0].x < b.points[0].x;
+                    }
+                    return a.points[0].y < b.points[0].y;
+                });
+                
+                // Bubble sort refinement for boxes on similar y-level
+                for (size_t i = 0; i < boxes.size() - 1; ++i) {
+                    for (int j = static_cast<int>(i); j >= 0; --j) {
+                        if (std::abs(boxes[j + 1].points[0].y - boxes[j].points[0].y) < 10.0f &&
+                            boxes[j + 1].points[0].x < boxes[j].points[0].x) {
+                            std::swap(boxes[j], boxes[j + 1]);
+                        } else {
+                            break;
+                        }
                     }
                 }
             }
