@@ -140,9 +140,8 @@ TEST(JsonResponseBuilder, BuildSuccessResponse_WithVisUrl) {
     std::string vis_url = "/static/vis/ocr_vis_12345.jpg";
     json response = JsonResponseBuilder::BuildSuccessResponse(results, vis_url);
     
-    // 每个结果应该包含 ocrImage 字段
-    EXPECT_TRUE(response["result"]["ocrResults"][0].contains("ocrImage"));
-    EXPECT_EQ(response["result"]["ocrResults"][0]["ocrImage"].get<std::string>(), vis_url);
+    EXPECT_TRUE(response["result"].contains("ocrImage"));
+    EXPECT_EQ(response["result"]["ocrImage"].get<std::string>(), vis_url);
 }
 
 /**

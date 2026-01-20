@@ -140,9 +140,7 @@ void OCRHandler::ResultCollectorLoop() {
         cv::Mat processed_image;
         
         if (base_pipeline_->getResult(results, result_id, &processed_image)) {
-            // #region agent log
-            LOG_INFO("[COLLECTOR] Got result for task_id={}, storing in map", result_id);
-            // #endregion
+            LOG_DEBUG("[COLLECTOR] Got result for task_id={}, storing in map", result_id);
             
             {
                 std::lock_guard<std::mutex> lock(result_mutex_);
@@ -166,9 +164,7 @@ bool OCRHandler::WaitForResult(int64_t task_id, std::vector<ocr::PipelineOCRResu
             results = std::move(it->second.results);
             processedImage = std::move(it->second.processedImage);
             result_store_.erase(it);
-            // #region agent log
-            LOG_INFO("[WAIT] Found result for task_id={}", task_id);
-            // #endregion
+            LOG_DEBUG("[WAIT] Found result for task_id={}", task_id);
             return true;
         }
         
@@ -366,8 +362,8 @@ int OCRHandler::HandleImageRequest(const OCRRequest& request, json& response_jso
     
     // 3. 提交任务到 pipeline
     int64_t task_id = GenerateTaskId();
-    LOG_INFO("[DEBUG] Pushing task_id={}", task_id);
-    
+    LOG_DEBUG("Pushing task_id={}", task_id);
+        
     if (!base_pipeline_->pushTask(image, task_id, taskConfig)) {
         LOG_ERROR("Failed to push task to pipeline");
         response_json = JsonResponseBuilder::BuildErrorResponse(

@@ -32,9 +32,8 @@
 ### 1. 克隆与初始化
 ```bash
 # 克隆项目并初始化子模块
-git clone --recursive https://github.com/Chris-godz/ocr_demo.git
-git checkout cppinfer
-cd ocr_demo
+git clone --recursive git@github.com:Chris-godz/DEEPX-OCR.git
+cd DEEPX-OCR
 ```
 
 ### 2. 安装依赖
@@ -108,16 +107,25 @@ OCR/
 │   ├── 📦 clipper2            # 多边形裁剪
 │   ├── 📦 spdlog              # 日志库
 │   ├── 📦 opencv              # 计算机视觉
-│   └── 📦 opencv_contrib      # 扩展模块 (freetype)
-├── 📂 engine/model_files/     # 模型权重
-│   ├── 📂 server/             # 高精度模型
-│   └── 📂 mobile/             # 轻量级模型
+│   ├── 📦 opencv_contrib      # 扩展模块 (freetype)
+│   ├── 📦 crow                # HTTP 框架
+│   ├── 📦 pdfium              # PDF 渲染
+│   ├── 📦 cpp-base64          # Base64 编码
+│   └── 📦 googletest          # 单元测试框架
+├── 📂 engine/model_files      # 模型权重
+│   ├── 📂 server/         # 高精度模型
+│   └── 📂 mobile/         # 轻量级模型
+├── 📂 server/                 # HTTP 服务器
+│   ├── 📂 benchmark/          # API 基准测试
+│   ├── 📂 tests/              # 服务器测试
+│   └── 📂 webui/              # Web 界面
 ├── 📂 benchmark/              # 性能基准测试
 ├── 📂 test/                   # 单元与集成测试
 ├── 📂 docs/                   # 文档
 ├── 📜 build.sh                # 编译脚本
 ├── 📜 run.sh                  # 交互式运行脚本
-└── 📜 setup.sh                # 模型设置脚本
+├── 📜 setup.sh                # 模型设置脚本
+└── 📜 set_env.sh              # 环境设置脚本
 ```
 
 ---
@@ -233,3 +241,27 @@ python3 benchmark/run_benchmark.py --model mobile --runs 60 \
 
 </details>
 
+---
+
+## 🌐 OCR 服务器
+
+```bash
+cd server
+./run_server.sh                    # 默认: 端口 8080, server 模型
+```
+
+---
+
+## 🖥️ WebUI 演示
+
+```bash
+cd server/webui
+python3 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+python app.py
+```
+
+![WebUI 主界面全貌](docs/images/image_web.png)
+
+
+**访问地址**: http://localhost:7860

@@ -4,26 +4,6 @@
  * 
  * 专注于高并发场景下的性能测试，用于测量服务器的 QPS 上限和吞吐能力
  * 
- * 
- * ==================== 编译和运行说明 ====================
- * 
- * 1. 编译项目:
- *    cd /home/deepx/Desktop/ocr_demo
- *    ./build.sh
- * 
- * 2. 启动 OCR 服务器 (在一个终端):
- *    cd /home/deepx/Desktop/ocr_demo/build_Release
- *    LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$(pwd)/../3rd-party/pdfium/lib ./bin/ocr_server --port 8080
- * 
- * 3. 运行压力测试:
- *    cd /home/deepx/Desktop/ocr_demo/build_Release
- *    ./bin/api_benchmark -i ../images -c 16 -r 5
- * 
- * 输出文件将保存到: server/benchmark/results/ 目录下
- *   - stress_benchmark_results.json
- *   - stress_benchmark_report.md
- * 
- * ========================================================
  */
 
 #include <iostream>

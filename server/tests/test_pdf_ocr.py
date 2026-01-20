@@ -21,12 +21,6 @@ PDF OCR 自动化测试脚本
     --timeout SEC       请求超时时间 (默认: 600 秒)
     --verbose           详细输出
     --help              显示帮助信息
-
-注意：
-    运行前请确保 OCR 服务已启动：
-    cd /home/deepx/Desktop/ocr_demo/build_Release
-    source ../set_env.sh 1 2 1 3 2 4
-    LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$(pwd)/../3rd-party/pdfium/lib ./bin/ocr_server --port 8080
 """
 
 import os
@@ -96,11 +90,9 @@ def print_server_instructions():
     print("❌ OCR 服务未启动！")
     print("=" * 60)
     print("\n请先启动 OCR 服务器：\n")
-    print("  cd /home/deepx/Desktop/ocr_demo")
     print("  source ./set_env.sh 1 2 1 3 2 4")
-    print("  cd build_Release")
-    print("  LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$(pwd)/../3rd-party/pdfium/lib \\")
-    print("    ./bin/ocr_server --port 8080")
+    print("  cd server")
+    print("  bash ./run_server.sh")
     print("\n" + "=" * 60)
 
 

@@ -27,19 +27,16 @@
 ### 1. 编译项目
 
 ```bash
-cd /home/deepx/Desktop/ocr_demo
 bash build.sh
 ```
 
 ### 2. 启动服务
 
 ```bash
-# 设置环境变量
-source ./set_env.sh 1 2 1 3 2 4
+cd server
 
-# 启动服务
-cd build_Release
-LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$(pwd)/../3rd-party/pdfium/lib ./bin/ocr_server [选项]
+# 使用默认配置启动（端口 8080，Server 模型）
+./run_server.sh
 ```
 
 ### 3. 验证服务
@@ -65,10 +62,10 @@ curl http://localhost:8080/health
 
 ```bash
 # 使用 mobile 模型，端口 9090
-./bin/ocr_server --port 9090 --model mobile
+./run_server.sh -p 9090 -m mobile
 
 # 使用 8 个 HTTP 线程
-./bin/ocr_server --threads 8
+./run_server.sh -t 8
 ```
 
 ---
@@ -199,22 +196,6 @@ Authorization: token <任意字符串>
 - **并行处理**：多页 PDF 采用并行渲染和并行 OCR 处理
 - **页数限制**：超出 `pdfMaxPages` 的页面不会被处理，响应中会包含 `warning` 字段
 
-### GET /health
-
-健康检查接口。
-
-```json
-{
-    "status": "healthy",
-    "service": "DeepX OCR Server",
-    "version": "1.0.0"
-}
-```
-
-### GET /static/vis/\<filename\>
-
-访问可视化结果图像。
-
 ---
 
 ## 🌐 Web UI
@@ -250,38 +231,19 @@ python app.py
 http://localhost:7860
 ```
 
-### 🔑 环境变量
-
-| 变量名 | 说明 | 默认值 |
-|--------|------|--------|
-| `API_URL` | OCR API 端点 | `http://localhost:8080/ocr` |
-| `API_BASE` | OCR 服务器基础 URL | `http://localhost:8080` |
-| `API_TOKEN` | API 认证令牌 | `deepx_token` |
-
-**示例**:
-
-```bash
-export API_URL="http://192.168.1.100:8080/ocr"
-export API_BASE="http://192.168.1.100:8080"
-python app.py
-```
-
-详细说明请参考 [webui/README.md](webui/README.md)。
 
 ---
 
 ## 🧪 基准测试
 
-使用 `benchmark/run.sh` 统一入口进行性能测试，支持 **Image OCR**、**PDF OCR** 和 **压力测试** 三种模式。
+使用 `benchmark/run.sh` 统一入口进行性能测试。
 
 ### 📊 测试模式
 
 | 模式 | 说明 | 命令 |
 |------|------|------|
-| `image` | Image OCR 测试 (Python Async) | `./run.sh --mode image` |
-| `pdf` | PDF OCR 测试 (Python Async) | `./run.sh --mode pdf` |
-| `stress` | 高并发压力测试 (C++) | `./run.sh --mode stress` |
-| `all` | 运行所有测试 | `./run.sh --mode all` |
+| `image` | Image OCR 测试 | `./run.sh --mode image` |
+| `pdf` | PDF OCR 测试 | `./run.sh --mode pdf` |
 
 ### 🛠️ 通用参数
 
@@ -312,15 +274,6 @@ cd server/benchmark
 
 # PDF OCR 测试，指定 DPI
 ./run.sh --mode pdf --dpi 200 --max-pages 50
-
-# 压力测试，16 并发，每项 5 次
-./run.sh --mode stress -c 16 -r 5
-
-# 使用已运行的服务器运行所有测试
-./run.sh --mode all -s
-
-# 运行完成后保持服务器
-./run.sh --mode image -k
 ```
 
 ### 🔀 并发模式说明
@@ -339,9 +292,7 @@ benchmark/results/
 ├── API_benchmark_report.md          # Image OCR 报告
 ├── api_benchmark_results.json       # Image OCR 结果
 ├── PDF_benchmark_report.md          # PDF OCR 报告
-├── pdf_benchmark_results.json       # PDF OCR 结果
-├── stress_benchmark_results.json    # 压力测试结果
-└── logs/                            # 服务器日志
+└── pdf_benchmark_results.json       # PDF OCR 结果
 ```
 
 <details>
@@ -349,48 +300,24 @@ benchmark/results/
 
 如果需要更精细的控制，可以直接运行 Python 脚本：
 
-**Image OCR 测试**:
-
 ```bash
 cd server/benchmark
 
-python3 run_api_benchmark.py \
-    -u "http://localhost:8080/ocr" \
-    -i "/path/to/images" \
-    -r 3 \
-    -c 10 \
-    -o "results/api_benchmark_results.json"
+# Image OCR 测试（4 并发，每张图片运行 3 次）
+python3 run_api_benchmark.py -i "../../images" -r 3 -c 4
+
+# PDF OCR 测试（DPI 150，最多处理 10 页）
+python3 run_pdf_benchmark.py -p "../pdf_file" --dpi 150 --max-pages 10
 ```
-
-**PDF OCR 测试**:
-
-```bash
-python3 run_pdf_benchmark.py \
-    -u "http://localhost:8080/ocr" \
-    -p "../pdf_file" \
-    -r 1 \
-    -c 4 \
-    --dpi 150 \
-    --max-pages 100 \
-    -o "results/pdf_benchmark_results.json"
-```
-
-**Python 脚本参数**:
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
-| `-u, --url` | 服务器 URL | http://localhost:8080/ocr |
-| `-t, --token` | 认证 Token | test_token |
-| `-r, --runs` | 每项运行次数 | 1 |
-| `-c, --concurrency` | 并发 Worker 数量 | 10 (image) / 1 (pdf) |
-| `-i, --images` | 测试图片目录 | - |
+| `-i, --images` | 测试图片目录 | ../../images |
 | `-p, --pdfs` | 测试 PDF 目录 | ../pdf_file |
+| `-r, --runs` | 每项运行次数 | 1 |
+| `-c, --concurrency` | 并发数量 | 10 (image) / 1 (pdf) |
 | `--dpi` | PDF 渲染 DPI | 150 |
 | `--max-pages` | PDF 最大处理页数 | 100 |
-| `--timeout` | 请求超时（秒） | 60 (image) / 600 (pdf) |
-| `-o, --output` | 输出 JSON 文件 | results/*.json |
-| `--report-dir` | Markdown 报告目录 | results |
-| `--no-report` | 跳过报告生成 | - |
 
 </details>
 
@@ -401,8 +328,7 @@ python3 run_pdf_benchmark.py \
 ### 运行所有测试
 
 ```bash
-cd build_Release
-ctest --output-on-failure
+bash build.sh test
 ```
 
 ### PDF OCR 功能测试
@@ -412,9 +338,6 @@ cd server/tests
 
 # 确保服务器已运行，然后执行
 ./run_pdf_ocr_test.sh
-
-# 或直接运行 Python 脚本
-python3 test_pdf_ocr.py --help
 ```
 
 ---
@@ -436,9 +359,8 @@ server/
 │   └── 📂 res/               # 资源文件 (Banner 等)
 ├── 📂 benchmark/             # 基准测试工具
 │   ├── 📜 run.sh             # 统一测试入口
-│   ├── 📜 run_api_benchmark.py   # Image API 测试 (Python Async)
-│   ├── 📜 run_pdf_benchmark.py   # PDF API 测试 (Python Async)
-│   ├── 📜 api_benchmark.cpp      # 压力测试 (C++)
+│   ├── 📜 run_api_benchmark.py   # Image API 测试
+│   ├── 📜 run_pdf_benchmark.py   # PDF API 测试
 │   └── 📂 results/           # 测试结果输出
 ├── 📂 pdf_file/              # 测试 PDF 文件
 └── 📂 tests/                 # 单元测试
@@ -448,12 +370,3 @@ server/
     └── 📂 results/               # 测试结果
 ```
 
----
-
-## 📤 输出目录
-
-| 目录 | 说明 |
-|------|------|
-| `output/vis/` | 可视化图像 |
-| `logs/deepx_ocr.log` | 服务日志 |
-| `benchmark/results/` | 基准测试结果 |

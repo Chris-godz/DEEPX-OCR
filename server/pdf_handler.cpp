@@ -1,8 +1,3 @@
-/**
- * @file pdf_handler.cpp
- * @brief PDF 文件处理器实现
- */
-
 #include "pdf_handler.h"
 #include "file_handler.h"
 #include "common/logger.hpp"

@@ -172,3 +172,7 @@ vis_server/
 engine/model_files/
 test/pipeline/
 server/tests/results/test*
+
+output/
+downloads/
+blog/

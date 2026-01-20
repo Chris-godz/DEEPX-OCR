@@ -7,6 +7,7 @@ import atexit
 import base64
 import io
 import json
+import logging
 import os
 import tempfile
 import threading
@@ -18,6 +19,14 @@ from pathlib import Path
 import gradio as gr
 import requests
 from PIL import Image
+
+# ============ 日志配置 ============
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 # Get absolute path for static files
 BASE_DIR = Path(__file__).parent.resolve()
@@ -51,7 +60,7 @@ paddle_theme = gr.themes.Soft(
     ),
 )
 
-MAX_NUM_PAGES = 10
+MAX_NUM_PAGES = 100
 TMP_DELETE_TIME = 900
 THREAD_WAKEUP_TIME = 600
 
@@ -64,6 +73,21 @@ CSS = """
     --primary-color: #2932E1;
     --primary-hover: #515eed;
     --primary-light: #e8eafc;
+    
+    /* ===== 强制所有 Gradio 组件使用浅色背景 ===== */
+    --background-fill-primary: #ffffff !important;
+    --background-fill-secondary: #F8F9FF !important;
+    --block-background-fill: #ffffff !important;
+    --block-label-background-fill: #F8F9FF !important;
+    --button-secondary-background-fill: #ffffff !important;
+    --button-secondary-background-fill-hover: var(--primary-light) !important;
+    --button-primary-background-fill-hover: var(--primary-hover) !important;
+    --input-background-fill: #ffffff !important;
+    --table-odd-background-fill: #ffffff !important;
+    --table-even-background-fill: #F8F9FF !important;
+    --checkbox-background-color: #ffffff !important;
+    --checkbox-background-color-hover: var(--primary-light) !important;
+    --slider-color: var(--primary-color) !important;
     --title-color: #140E35;
     --text-color: #565772;
     --text-light: #9498AC;
@@ -107,26 +131,16 @@ p, span, div, li, td, th {
     max-width: 100% !important;
     width: 100% !important;
     margin: 0 !important;
-    padding: 0 10px !important;
+    padding: 0 !important;
 }
 
-/* Force all containers to use full width */
+/* Force main containers to use full width */
 .gradio-container .app,
 .gradio-container main,
 .gradio-container .wrap,
-.gradio-container .contain,
-.row,
-#results-column,
-#sidebar-column,
-.white-container,
-.column {
+.gradio-container .contain {
     max-width: none !important;
     width: 100% !important;
-}
-
-/* Override any flex basis constraints */
-.row > .column {
-    flex-basis: 0 !important;
 }
 
 /* ===== Typography ===== */
@@ -413,6 +427,55 @@ span[data-testid="block-info"] {
     margin-top: 8px !important;
     background: #F0F2FF !important;
     border-radius: var(--radius-sm) !important;
+}
+
+/* 强制文件上传组件使用白色/浅色背景 */
+.drag-drop-file-custom .file-preview,
+.drag-drop-file-custom .file-preview *,
+.drag-drop-file-custom [data-testid="file"],
+.drag-drop-file-custom .wrap,
+.drag-drop-file-custom button[aria-label],
+.upload-area .file-preview,
+.upload-area [data-testid="file"],
+.upload-area .wrap {
+    background: #ffffff !important;
+    background-color: #ffffff !important;
+}
+
+/* 文件信息区域 - 浅蓝色背景 */
+.drag-drop-file-custom .file-preview-holder,
+.drag-drop-file-custom .file-preview-holder *,
+.file-preview .name,
+.file-preview .size {
+    background: #F0F2FF !important;
+    color: var(--title-color) !important;
+}
+
+/* 文件上传按钮和预览区域 */
+.drag-drop-file-custom button,
+.drag-drop-file-custom .upload-button {
+    background: #FAFBFF !important;
+}
+
+/* 已上传文件的显示区域 */
+.drag-drop-file-custom:has(.file-preview-holder) {
+    background: #ffffff !important;
+}
+
+/* Gradio 文件组件内部样式覆盖 */
+.gr-file .file-preview,
+.gr-file .wrap,
+.gr-file button {
+    background: #ffffff !important;
+    color: var(--title-color) !important;
+}
+
+/* 文件大小和名称文字颜色 */
+.file-preview .file-name,
+.file-preview .file-size,
+.file-preview span {
+    color: var(--title-color) !important;
+    background: transparent !important;
     padding: 8px !important;
 }
 
@@ -420,6 +483,20 @@ span[data-testid="block-info"] {
     margin-top: 8px !important;
     color: #52c41a !important;
     font-weight: 500 !important;
+    background: #F0FFF0 !important;
+    border: 1px solid #B7EB8F !important;
+    border-radius: 6px !important;
+    padding: 8px 12px !important;
+}
+
+/* 文件状态 Textbox 的内部元素 */
+.file-status input,
+.file-status textarea,
+.file-status .wrap,
+.file-status > div {
+    background: transparent !important;
+    color: #389E0D !important;
+    border: none !important;
 }
 
 /* ===== Tabs ===== */
@@ -458,13 +535,80 @@ span[data-testid="block-info"] {
 
 .tab-nav button.selected, .gr-tab-nav button.selected,
 .tab-nav button[aria-selected="true"], .gr-tab-nav button[aria-selected="true"] {
-    background: var(--bg-white) !important;
-    color: var(--primary-color) !important;
+    background: var(--primary-color) !important;
+    color: #ffffff !important;
     font-weight: 600 !important;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1) !important;
 }
 
 .tab-nav button:hover, .gr-tab-nav button:hover {
+    background: var(--primary-light) !important;
+    color: var(--primary-color) !important;
+}
+
+/* ===== 强制所有按钮悬停状态使用浅色背景 ===== */
+button:hover,
+.gr-button:hover,
+[role="tab"]:hover,
+.svelte-1p9xokt:hover,
+[data-testid]:hover,
+.tab-nav button:hover,
+.tabs button:hover {
+    background-color: var(--primary-light) !important;
+    color: var(--primary-color) !important;
+}
+
+/* 强制覆盖 Gradio 暗色悬停样式 */
+*:hover {
+    --block-background-fill: #ffffff;
+    --button-secondary-background-fill-hover: var(--primary-light);
+    --button-primary-background-fill-hover: var(--primary-hover);
+}
+
+/* ===== 全局强制浅色背景 ===== */
+/* 所有按钮悬停状态 */
+.gr-button:hover,
+.secondary:hover,
+button.secondary:hover,
+[data-testid="button"]:hover,
+.gr-box:hover,
+.gr-input:hover,
+.gr-check-radio:hover,
+.svelte-1p9xokt:hover {
+    background: var(--primary-light) !important;
+    background-color: var(--primary-light) !important;
+}
+
+/* 强制所有输入框和区域使用白色背景 */
+input, textarea, select,
+.gr-box, .gr-input, .gr-form,
+[data-testid], .svelte-1p9xokt,
+.wrap, .container {
+    background-color: #ffffff !important;
+}
+
+/* 强制禁用暗色模式 */
+.dark, [data-theme="dark"], .dark-mode {
+    --background-fill-primary: #ffffff !important;
+    --background-fill-secondary: #F8F9FF !important;
+    --block-background-fill: #ffffff !important;
+}
+
+/* Tab 按钮选中状态 - 使用主色调背景 */
+button[role="tab"][aria-selected="true"],
+[role="tab"].selected,
+.tabs button[aria-selected="true"],
+.gr-tabs button[aria-selected="true"] {
+    background: var(--primary-color) !important;
+    background-color: var(--primary-color) !important;
+    color: #ffffff !important;
+}
+
+/* Tab 按钮悬停但未选中 */
+button[role="tab"]:hover:not([aria-selected="true"]),
+[role="tab"]:hover:not(.selected) {
+    background: var(--primary-light) !important;
+    background-color: var(--primary-light) !important;
     color: var(--primary-color) !important;
 }
 
@@ -666,6 +810,244 @@ span[data-testid="block-info"] {
     transform: none !important;
 }
 
+/* OCR Result Gallery - Vertical scrollable list with dynamic height */
+.ocr-result-gallery-vertical {
+    width: 100% !important;
+    max-width: 100% !important;
+    height: auto !important;
+    min-height: unset !important;
+    max-height: 600px !important;  /* Will be overridden by JS */
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    padding: 12px !important;
+    background: var(--bg-white) !important;
+    border: 1px solid var(--border-color) !important;
+    border-radius: var(--radius-lg) !important;
+    scrollbar-width: thin !important;
+    scrollbar-color: var(--primary-color) var(--bg-hover) !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;  /* Center images horizontally */
+}
+
+/* Force Gallery wrapper to fit content */
+.ocr-result-gallery-vertical > .wrap,
+.ocr-result-gallery-vertical > div {
+    height: auto !important;
+    min-height: unset !important;
+}
+
+.ocr-result-gallery-vertical::-webkit-scrollbar {
+    width: 8px !important;
+}
+
+.ocr-result-gallery-vertical::-webkit-scrollbar-track {
+    background: var(--bg-hover) !important;
+    border-radius: 4px !important;
+}
+
+.ocr-result-gallery-vertical::-webkit-scrollbar-thumb {
+    background: var(--primary-color) !important;
+    border-radius: 4px !important;
+}
+
+.ocr-result-gallery-vertical::-webkit-scrollbar-thumb:hover {
+    background: var(--primary-hover) !important;
+}
+
+.ocr-result-gallery-vertical .grid-wrap {
+    height: auto !important;
+    min-height: unset !important;
+    max-height: none !important;
+    overflow: visible !important;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 16px !important;
+}
+
+.ocr-result-gallery-vertical .grid-container {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 16px !important;
+}
+
+.ocr-result-gallery-vertical .thumbnail-item {
+    width: 100% !important;
+    max-width: 100% !important;
+    border-radius: var(--radius-md) !important;
+    border: 2px solid var(--border-color) !important;
+    transition: all 0.2s ease !important;
+    margin-bottom: 8px !important;
+    display: flex !important;
+    justify-content: center !important;
+    align-items: center !important;
+}
+
+.ocr-result-gallery-vertical .thumbnail-item:hover {
+    border-color: var(--primary-color) !important;
+    box-shadow: 0 2px 8px rgba(41, 50, 225, 0.15) !important;
+}
+
+.ocr-result-gallery-vertical .thumbnail-item.selected {
+    border-color: var(--primary-color) !important;
+}
+
+/* Gallery images - centered and scaled to fill container */
+.ocr-result-gallery-vertical .thumbnail-item img {
+    width: 100% !important;
+    height: auto !important;
+    object-fit: contain !important;
+    max-width: 100% !important;
+    margin: 0 auto !important;
+}
+
+/* JSON Output Scrollable Container - dynamic height */
+#json-output-scrollable {
+    max-height: 600px !important;  /* Will be overridden by JS */
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    scrollbar-width: thin !important;
+    scrollbar-color: var(--primary-color) var(--bg-hover) !important;
+    background: var(--bg-white) !important;
+    border: 1px solid var(--border-color) !important;
+    border-radius: var(--radius-lg) !important;
+    padding: 12px !important;
+    margin: 0 !important;
+}
+
+#json-output-scrollable::-webkit-scrollbar {
+    width: 8px !important;
+}
+
+#json-output-scrollable::-webkit-scrollbar-track {
+    background: var(--bg-hover) !important;
+    border-radius: 4px !important;
+}
+
+#json-output-scrollable::-webkit-scrollbar-thumb {
+    background: var(--primary-color) !important;
+    border-radius: 4px !important;
+}
+
+#json-output-scrollable::-webkit-scrollbar-thumb:hover {
+    background: var(--primary-hover) !important;
+}
+
+/* Results Content Wrapper - contains Tabs and Download button */
+#results-content-wrapper {
+    display: flex !important;
+    flex-direction: column !important;
+    height: auto !important;
+}
+
+/* Results content - OCR and JSON displayed together vertically */
+#results-content-wrapper > .block,
+#results-content-wrapper > div:not(.download-btn-container) {
+    margin-bottom: 12px !important;
+}
+
+/* Download button container - fixed at Results bottom with minimal top margin */
+.download-btn-container {
+    margin-top: 4px !important;
+    margin-bottom: 0 !important;
+    padding: 0 !important;
+    gap: 12px !important;
+    flex-shrink: 0 !important;
+}
+
+.download-btn-container .download-file {
+    margin: 0 !important;
+}
+
+/* OCR gallery - small bottom margin to Tab Content boundary */
+#ocr-gallery-scrollable {
+    margin: 0 !important;
+    margin-bottom: 1px !important;
+    height: auto !important;
+    min-height: unset !important;
+}
+
+/* OCR gallery wrapper - fit content height */
+#ocr-gallery-scrollable > div,
+#ocr-gallery-scrollable .wrap,
+#ocr-gallery-scrollable .svelte-1p9xokt {
+    height: auto !important;
+    min-height: unset !important;
+}
+
+/* OCR Gallery - remove all internal spacing and fixed heights */
+.ocr-result-gallery-vertical .preview,
+.ocr-result-gallery-vertical .caption-container,
+.ocr-result-gallery-vertical > .wrap,
+.ocr-result-gallery-vertical > div {
+    margin: 0 !important;
+    padding: 0 !important;
+    height: auto !important;
+    min-height: unset !important;
+}
+
+/* Remove any fixed height from all Gallery internals */
+#ocr-gallery-scrollable,
+#ocr-gallery-scrollable > *,
+#ocr-gallery-scrollable > * > *,
+.ocr-result-gallery-vertical,
+.ocr-result-gallery-vertical > *,
+.ocr-result-gallery-vertical > * > * {
+    min-height: unset !important;
+}
+
+/* Force content to fit - remove any grid/flex related height constraints */
+.ocr-result-gallery-vertical [class*="grid"],
+.ocr-result-gallery-vertical [class*="wrap"],
+.ocr-result-gallery-vertical [class*="container"] {
+    height: auto !important;
+    min-height: unset !important;
+}
+
+/* JSON container - small bottom margin to Tab Content boundary */
+.json-output-container {
+    margin: 0 !important;
+    padding: 0 !important;
+    margin-bottom: 1px !important;
+}
+
+/* ===== 初始状态隐藏控件 ===== */
+/* 隐藏空的 Gallery 占位符 (裂图) */
+#ocr-gallery-scrollable:empty,
+#ocr-gallery-scrollable .grid-wrap:empty,
+.ocr-result-gallery-vertical:empty {
+    display: none !important;
+}
+
+/* 隐藏没有图片的 Gallery */
+#ocr-gallery-scrollable:not(:has(img)),
+.ocr-result-gallery-vertical:not(:has(img)) {
+    display: none !important;
+    visibility: hidden !important;
+    height: 0 !important;
+    min-height: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    border: none !important;
+    overflow: hidden !important;
+}
+
+/* 隐藏空的 JSON 组件 */
+#json-output-scrollable:empty,
+#json-output-scrollable:not(:has(.json-holder)) {
+    display: none !important;
+}
+
+/* 当父容器隐藏时，确保子组件也完全隐藏 */
+#results-content-wrapper[style*="display: none"] * {
+    display: none !important;
+}
+
+/* 隐藏空的下载按钮容器 */
+.download-btn-container:empty {
+    display: none !important;
+}
+
 /* ===== Spacing Classes ===== */
 .tight-spacing { margin-bottom: -5px !important; }
 
@@ -742,9 +1124,78 @@ span[data-testid="block-info"] {
     color: var(--text-color) !important;
 }
 
+/* ===== Layout ===== */
+.main-row {
+    display: grid !important;
+    grid-template-columns: 360px 1fr !important;
+    column-gap: 16px !important;
+    align-items: stretch !important;  /* Keep both columns same height */
+    width: 100% !important;
+    margin: 0 !important;
+}
+
+.main-row > .column {
+    min-width: 0 !important;
+}
+
+#sidebar-column {
+    width: 360px !important;
+    max-width: 360px !important;
+    grid-column: 1 !important;
+    position: sticky !important;
+    top: 0 !important;
+    align-self: stretch !important;
+    overflow: visible !important;
+}
+
+#results-column {
+    min-width: 0 !important;
+    grid-column: 2 !important;
+    align-self: stretch !important;  /* Match sidebar height */
+}
+
+/* Results column white container - fill height and match sidebar */
+#results-column > .white-container {
+    display: flex !important;
+    flex-direction: column !important;
+    height: 100% !important;
+    min-height: inherit !important;
+}
+
+/* Results content wrapper - compact content at top, but can expand */
+#results-content-wrapper {
+    flex-shrink: 0 !important;
+    flex-grow: 1 !important;  /* Allow expanding to fill remaining space */
+    display: flex !important;
+    flex-direction: column !important;
+}
+
+/* Results content - vertical layout */
+#results-content-wrapper {
+    display: flex !important;
+    flex-direction: column !important;
+}
+
 /* ===== Responsive ===== */
+@media (max-width: 1100px) {
+    .main-row {
+        grid-template-columns: 1fr !important;
+        row-gap: 16px !important;
+    }
+
+    #sidebar-column,
+    #results-column {
+        grid-column: 1 !important;
+        width: 100% !important;
+        max-width: 100% !important;
+        min-width: 0 !important;
+        position: static !important;
+        min-height: auto !important;
+    }
+}
+
 @media (max-width: 768px) {
-    .gradio-container { padding: 12px !important; }
+    .gradio-container { padding: 0 !important; }
     
     #analyze-btn, #unzip-btn {
         padding: 10px 20px !important;
@@ -755,9 +1206,10 @@ span[data-testid="block-info"] {
 /* ===== Banner ===== */
 .banner-container {
     background: transparent !important;
-    margin: -16px -16px 16px -16px !important;
+    margin: 0 !important;
     padding: 0 !important;
-    width: calc(100% + 32px) !important;
+    width: 100% !important;
+    max-width: 100% !important;
     border: none !important;
     box-shadow: none !important;
     border-radius: 0 !important;
@@ -768,6 +1220,7 @@ span[data-testid="block-info"] {
     display: flex !important;
     justify-content: center !important;
     align-items: center !important;
+    width: 100% !important;
 }
 
 .banner-container .image-container button {
@@ -779,14 +1232,15 @@ span[data-testid="block-info"] {
     background: transparent !important;
     display: flex !important;
     justify-content: center !important;
+    width: 100% !important;
 }
 
 .banner-container img {
     max-width: 100% !important;
-    width: auto !important;
+    width: 100% !important;
     height: auto !important;
     display: block !important;
-    margin: 0 auto !important;
+    margin: 0 !important;
     object-fit: contain !important;
 }
 
@@ -808,8 +1262,13 @@ div[class*="tab"] button {
     color: var(--title-color) !important;
 }
 
-button[role="tab"][aria-selected="true"],
-button[role="tab"]:hover {
+button[role="tab"][aria-selected="true"] {
+    background: var(--primary-color) !important;
+    color: #ffffff !important;
+}
+
+button[role="tab"]:hover:not([aria-selected="true"]) {
+    background: var(--primary-light) !important;
     color: var(--primary-color) !important;
 }
 
@@ -873,6 +1332,27 @@ input::placeholder,
 textarea::placeholder {
     color: var(--text-light) !important;
 }
+
+/* ===== 强制所有 Textbox 使用浅色背景 ===== */
+.gr-textbox,
+.gr-textbox input,
+.gr-textbox textarea,
+.gr-textbox .wrap,
+[data-testid="textbox"],
+[data-testid="textbox"] input,
+[data-testid="textbox"] textarea {
+    background: #ffffff !important;
+    background-color: #ffffff !important;
+}
+
+/* 禁用状态的 Textbox 使用浅绿色背景 */
+.gr-textbox.disabled,
+.gr-textbox[disabled],
+.gr-textbox input:disabled,
+.gr-textbox textarea:disabled {
+    background: #F0FFF0 !important;
+    color: #389E0D !important;
+}
 """
 
 EXAMPLE_DIR = BASE_DIR / "examples"
@@ -910,6 +1390,25 @@ DESC_DICT = {
 
 tmp_time = {}
 lock = threading.Lock()
+
+
+# ============ 配置变更日志函数 ============
+def log_checkbox_change(name: str):
+    """返回一个记录 Checkbox 变更的函数"""
+    def _log(value):
+        status = "启用" if value else "禁用"
+        logger.info(f"[Settings] {name}: {status}")
+        return value
+    return _log
+
+
+def log_number_change(name: str, unit: str = ""):
+    """返回一个记录 Number 变更的函数"""
+    def _log(value):
+        unit_str = f" {unit}" if unit else ""
+        logger.info(f"[Settings] {name}: {value}{unit_str}")
+        return value
+    return _log
 
 
 def gen_tooltip_radio(desc_dict):
@@ -991,6 +1490,25 @@ def process_file(
             file_path = image_input
             file_type = 1  # Image
         
+        # 记录处理开始和配置参数
+        file_name = os.path.basename(file_path) if file_path else "Unknown"
+        file_type_str = "PDF" if file_type == 0 else "Image"
+        logger.info(f"[Process] 开始处理文件: {file_name} (类型: {file_type_str})")
+        logger.info(f"[Process] 当前配置参数:")
+        logger.info(f"  - Module Selection:")
+        logger.info(f"      图像方向校正: {'启用' if use_doc_orientation_classify else '禁用'}")
+        logger.info(f"      图像畸变校正: {'启用' if use_doc_unwarping else '禁用'}")
+        logger.info(f"      文本行方向校正: {'启用' if use_textline_orientation else '禁用'}")
+        logger.info(f"  - OCR Settings:")
+        logger.info(f"      文本检测像素阈值: {text_det_thresh}")
+        logger.info(f"      文本检测框阈值: {text_det_box_thresh}")
+        logger.info(f"      扩展系数: {text_det_unclip_ratio}")
+        logger.info(f"      文本识别分数阈值: {text_rec_score_thresh}")
+        if file_type == 0:
+            logger.info(f"  - PDF Settings:")
+            logger.info(f"      PDF渲染DPI: {pdf_dpi}")
+            logger.info(f"      PDF最大页数: {pdf_max_pages}")
+        
         # Read file content
         with open(file_path, "rb") as f:
             file_bytes = f.read()
@@ -1069,6 +1587,11 @@ def process_file(
                         overall_ocr_res_images.append(ocr_image_bytes)
                         input_images.append(ocr_image_bytes)
 
+        # 记录处理完成
+        logger.info(f"[Process] 处理完成: {file_name}")
+        logger.info(f"  - 结果图片数量: {len(overall_ocr_res_images)}")
+        logger.info(f"  - 输入图片数量: {len(input_images)}")
+        
         return {
             "original_file": file_path,
             "file_type": "pdf" if file_type == 0 else "image",
@@ -1079,8 +1602,10 @@ def process_file(
         }
 
     except requests.exceptions.RequestException as e:
+        logger.error(f"[Process] API请求失败: {str(e)}")
         raise gr.Error(f"API request failed: {str(e)}")
     except Exception as e:
+        logger.error(f"[Process] 处理文件时发生错误: {str(e)}")
         raise gr.Error(f"Error processing file: {str(e)}")
 
 
@@ -1202,79 +1727,53 @@ def validate_file_input(file_path, image_input):
 
 
 def toggle_spinner(file_path, image_input):
-    """Show spinner when file is present"""
+    """Show spinner when file is present, hide results content"""
     if not file_path and not image_input:
         return (
             gr.skip(),
             gr.skip(),
             gr.skip(),
             gr.skip(),
-            gr.skip(),
         )
     return (
-        gr.Column(visible=True),
-        gr.Column(visible=False),
-        gr.File(visible=False),
-        gr.update(visible=False),
-        gr.update(visible=False),
+        gr.Column(visible=True),   # loading_spinner: show
+        gr.Column(visible=False),  # prepare_spinner: hide
+        gr.File(visible=False),    # download_file: hide
+        gr.Column(visible=False),  # results_content: hide
     )
 
 
 def hide_spinner(results):
-    """Hide spinner and show tabs when results are available"""
+    """Hide spinner and show results content when results are available"""
     if results:
-        return gr.Column(visible=False), gr.update(visible=True)
+        return gr.Column(visible=False), gr.Column(visible=True)
     else:
         return gr.Column(visible=False), gr.skip()
 
 
 def update_display(results):
     if not results:
-        return [gr.skip()] * (MAX_NUM_PAGES + 1 + len(gallery_list))
+        # 返回隐藏状态的控件 (JSON, Gallery, Download按钮行)
+        return [gr.skip()] * (1 + len(gallery_list) + 1)
     
-    # Validate results
-    assert len(results["overall_ocr_res_images"]) <= MAX_NUM_PAGES, len(
-        results["overall_ocr_res_images"]
-    )
-    
-    # Prepare OCR images
-    ocr_imgs = []
-    for img in results["overall_ocr_res_images"]:
-        ocr_imgs.append(gr.Image(value=bytes_to_image(img), visible=True))
-    for _ in range(len(results["overall_ocr_res_images"]), MAX_NUM_PAGES):
-        ocr_imgs.append(gr.Image(visible=False))
-    
-    # Prepare JSON output
+    # Prepare JSON output (显示在 JSON Tab 的可滚动区域) - 显示并更新值
     output_json = [gr.JSON(value=results["output_json"], visible=True)]
     
-    # Prepare gallery images - convert bytes to PIL Image for gallery
+    # Prepare gallery images from OCR result images (显示在 OCR Tab 的可滚动 Gallery)
     gallery_images = []
-    for img_data in results["input_images"]:
+    for img_data in results["overall_ocr_res_images"]:
         if isinstance(img_data, bytes):
             gallery_images.append(bytes_to_image(img_data))
         else:
             gallery_images.append(img_data)
     
-    # Update all galleries with the same images
-    gallery_list_imgs = []
-    for i in range(len(gallery_list)):
-        gallery_list_imgs.append(
-            gr.Gallery(
-                value=gallery_images,
-                rows=len(gallery_images) if len(gallery_images) > 0 else 1,
-            )
-        )
+    # Update OCR Gallery with the OCR result images - 显示并更新值
+    gallery_list_imgs = [gr.Gallery(value=gallery_images, visible=True)]
     
-    return ocr_imgs + output_json + gallery_list_imgs
-
-
-def update_image(evt: gr.SelectData):
-    update_images = []
-    for index in range(MAX_NUM_PAGES):
-        update_images.append(
-            gr.Image(visible=False) if index != evt.index else gr.Image(visible=True)
-        )
-    return update_images
+    # Download 按钮行 - 显示
+    download_btn_visible = [gr.Row(visible=True)]
+    
+    return output_json + gallery_list_imgs + download_btn_visible
 
 
 def delete_file_periodically():
@@ -1317,7 +1816,7 @@ FORCE_EN_SCRIPT = """
 with gr.Blocks(css=CSS, title=TITLE, theme=paddle_theme, head=FORCE_EN_SCRIPT) as demo:
     results_state = gr.State()
 
-    # Top Banner
+    # Top banner (full-width, outside main layout)
     gr.Image(
         value=BANNER_PATH,
         show_label=False,
@@ -1327,7 +1826,7 @@ with gr.Blocks(css=CSS, title=TITLE, theme=paddle_theme, head=FORCE_EN_SCRIPT) a
         elem_classes=["banner-container"],
     )
     
-    with gr.Row():
+    with gr.Row(elem_classes=["main-row"]):
         with gr.Column(scale=3, elem_classes=["sidebar-column"], elem_id="sidebar-column"):
         
             # Upload section
@@ -1505,7 +2004,7 @@ with gr.Blocks(css=CSS, title=TITLE, theme=paddle_theme, head=FORCE_EN_SCRIPT) a
 
         # Results display section
         with gr.Column(scale=7, elem_classes=["white-container"], elem_id="results-column"):
-            
+
             gr.Markdown("### 📋 Results", elem_classes="custom-markdown")
 
             loading_spinner = gr.Column(
@@ -1553,85 +2052,54 @@ with gr.Blocks(css=CSS, title=TITLE, theme=paddle_theme, head=FORCE_EN_SCRIPT) a
                     """
                 )
 
-            overall_ocr_res_images = []
             output_json_list = []
             gallery_list = []
-            with gr.Tabs(visible=False) as tabs:
-                with gr.Tab("OCR"):
-                    with gr.Row():
-                        with gr.Column(scale=2, min_width=1):
-                            gallery_ocr_det = gr.Gallery(
-                                show_label=False,
-                                allow_preview=False,
-                                preview=False,
-                                columns=1,
-                                min_width=10,
-                                object_fit="contain",
-                            )
-                            gallery_list.append(gallery_ocr_det)
-                        with gr.Column(scale=10):
-                            for i in range(MAX_NUM_PAGES):
-                                overall_ocr_res_images.append(
-                                    gr.Image(
-                                        label=f"OCR Image {i}",
-                                        show_label=True,
-                                        visible=False,
-                                    )
-                                )
-                with gr.Tab("JSON"):
-                    with gr.Row():
-                        with gr.Column(scale=2, min_width=1):
-                            gallery_json = gr.Gallery(
-                                show_label=False,
-                                allow_preview=False,
-                                preview=False,
-                                columns=1,
-                                min_width=10,
-                                object_fit="contain",
-                            )
-                            gallery_list.append(gallery_json)
-                        with gr.Column(scale=10):
-                            gr.HTML(
-                                """
-                            <style>
-                            .line.svelte-19ir0ev svg {
-                                width: 30px !important;
-                                height: 30px !important;
-                                min-width: 30px !important;
-                                min-height: 30px !important;
-                                padding: 0 !important;
-                                font-size: 18px !important;
-                            }
-                            .line.svelte-19ir0ev span:contains('Object(') {
-                                font-size: 12px;
-                                }
-                            </style>
-                            """
-                            )
-                            output_json_list.append(
-                                gr.JSON(
-                                    visible=False,
-                                )
-                            )
-            download_all_btn = gr.Button(
-                "📦 Download Full Results (ZIP)",
-                elem_id="unzip-btn",
-                variant="primary",
-                visible=False,
-            )
+            
+            # Results 内容区域 - 初始隐藏，只有在收到响应后才显示
+            # OCR 图片和 JSON 一起显示，无需 Tab 切换
+            with gr.Column(visible=False, elem_id="results-content-wrapper") as results_content:
+                # OCR 识别结果图片：垂直滚动显示 - 初始隐藏
+                gallery_ocr_det = gr.Gallery(
+                    show_label=False,
+                    allow_preview=False,  # 禁用双击放大预览功能
+                    preview=False,
+                    columns=1,
+                    rows=None,
+                    height="auto",
+                    object_fit="contain",
+                    elem_classes=["ocr-result-gallery-vertical"],
+                    elem_id="ocr-gallery-scrollable",
+                    visible=False,
+                )
+                gallery_list.append(gallery_ocr_det)
+                
+                # JSON 输出：可滚动的 JSON 显示控件 - 初始隐藏
+                output_json_list.append(
+                    gr.JSON(
+                        visible=False,
+                        elem_id="json-output-scrollable",
+                        elem_classes=["json-output-container"],
+                    )
+                )
+                
+                # Download 按钮容器 - 初始隐藏
+                with gr.Row(visible=False, elem_classes=["download-btn-container"]) as download_btn_row:
+                    download_all_btn = gr.Button(
+                        "📦 Download Full Results (ZIP)",
+                        elem_id="unzip-btn",
+                        variant="primary",
+                    )
+                    download_file = gr.File(visible=False, label="Download File", elem_classes=["download-file"])
 
-            download_file = gr.File(visible=False, label="Download File")
-
-            gr.Markdown("", elem_classes="custom-markdown")
-
-            gr.Image(
-                value=BANNER_CES_PATH,
-                show_label=False,
-                show_download_button=False,
-                show_fullscreen_button=False,
-                container=False,
-                elem_classes=["banner-container"],
-            )
+    # Bottom banner (full-width, outside main layout)
+    gr.Image(
+        value=BANNER_CES_PATH,
+        show_label=False,
+        show_download_button=False,
+        show_fullscreen_button=False,
+        container=False,
+        elem_classes=["banner-container"],
+    )
 
     # Sidebar toggle button
     gr.HTML(
@@ -1641,17 +2109,9 @@ with gr.Blocks(css=CSS, title=TITLE, theme=paddle_theme, head=FORCE_EN_SCRIPT) a
             <span class="toggle-text">HIDE LEFT MENU</span>
         </button>
         """
-    )        
-    
-    gr.Markdown("", elem_classes="custom-markdown")
-    gr.Image(
-        value=BANNER_PATH,
-        show_label=False,
-        show_download_button=False,
-        show_fullscreen_button=False,
-        container=False,
-        elem_classes=["banner-container"],
     )
+
+    gr.Markdown("", elem_classes="custom-markdown")
     
     # ============ 事件处理 ============
     process_btn.click(
@@ -1665,8 +2125,7 @@ with gr.Blocks(css=CSS, title=TITLE, theme=paddle_theme, head=FORCE_EN_SCRIPT) a
             loading_spinner,
             prepare_spinner,
             download_file,
-            tabs,
-            download_all_btn,
+            results_content,
         ],
     ).then(
         process_file,
@@ -1685,22 +2144,86 @@ with gr.Blocks(css=CSS, title=TITLE, theme=paddle_theme, head=FORCE_EN_SCRIPT) a
         ],
         outputs=[results_state],
     ).then(
-        hide_spinner, inputs=[results_state], outputs=[loading_spinner, tabs]
+        hide_spinner, inputs=[results_state], outputs=[loading_spinner, results_content]
     ).then(
         update_display,
         inputs=[results_state],
-        outputs=overall_ocr_res_images + output_json_list + gallery_list,
-    ).then(
-        lambda results: gr.update(visible=True) if results else gr.skip(),
-        inputs=[results_state],
-        outputs=download_all_btn,
+        outputs=output_json_list + gallery_list + [download_btn_row],
     )
 
-    gallery_ocr_det.select(update_image, outputs=overall_ocr_res_images)
+    # ============ 配置变更日志事件 ============
+    # Module Selection 配置
+    use_doc_orientation_classify_cb.change(
+        fn=log_checkbox_change("Image Orientation Correction (图像方向校正)"),
+        inputs=[use_doc_orientation_classify_cb],
+        outputs=[use_doc_orientation_classify_cb],
+    )
+    use_doc_unwarping_cb.change(
+        fn=log_checkbox_change("Image Distortion Correction (图像畸变校正)"),
+        inputs=[use_doc_unwarping_cb],
+        outputs=[use_doc_unwarping_cb],
+    )
+    use_textline_orientation_cb.change(
+        fn=log_checkbox_change("Text Line Orientation Correction (文本行方向校正)"),
+        inputs=[use_textline_orientation_cb],
+        outputs=[use_textline_orientation_cb],
+    )
+    
+    # OCR Settings 配置
+    text_det_thresh_nb.change(
+        fn=log_number_change("Text Detection Pixel Threshold (文本检测像素阈值)"),
+        inputs=[text_det_thresh_nb],
+        outputs=[text_det_thresh_nb],
+    )
+    text_det_box_thresh_nb.change(
+        fn=log_number_change("Text Detection Box Threshold (文本检测框阈值)"),
+        inputs=[text_det_box_thresh_nb],
+        outputs=[text_det_box_thresh_nb],
+    )
+    text_det_unclip_ratio_nb.change(
+        fn=log_number_change("Expansion Coefficient (扩展系数)"),
+        inputs=[text_det_unclip_ratio_nb],
+        outputs=[text_det_unclip_ratio_nb],
+    )
+    text_rec_score_thresh_nb.change(
+        fn=log_number_change("Text Recognition Score Threshold (文本识别分数阈值)"),
+        inputs=[text_rec_score_thresh_nb],
+        outputs=[text_rec_score_thresh_nb],
+    )
+    
+    # PDF Settings 配置
+    pdf_dpi_nb.change(
+        fn=log_number_change("PDF Render DPI (PDF渲染DPI)", "DPI"),
+        inputs=[pdf_dpi_nb],
+        outputs=[pdf_dpi_nb],
+    )
+    pdf_max_pages_nb.change(
+        fn=log_number_change("PDF Max Pages (PDF最大页数)", "页"),
+        inputs=[pdf_max_pages_nb],
+        outputs=[pdf_max_pages_nb],
+    )
 
     download_all_btn.click(
         export_full_results, inputs=[results_state], outputs=[download_file]
-    ).success(lambda: gr.update(visible=True), outputs=[download_file])
+    ).success(
+        fn=None,
+        inputs=[],
+        outputs=[],
+        js="""
+        () => {
+            // 自动触发下载，无需显示额外的文件组件
+            setTimeout(() => {
+                const downloadFile = document.querySelector('.download-file');
+                if (downloadFile) {
+                    const downloadLink = downloadFile.querySelector('a[download]') || downloadFile.querySelector('a[href]');
+                    if (downloadLink) {
+                        downloadLink.click();
+                    }
+                }
+            }, 100);
+        }
+        """
+    )
 
     demo.load(
         fn=lambda: None,
@@ -1713,6 +2236,114 @@ with gr.Blocks(css=CSS, title=TITLE, theme=paddle_theme, head=FORCE_EN_SCRIPT) a
             const toggleBtn = document.getElementById('sidebar-toggle-btn');
             const sidebar = document.getElementById('sidebar-column');
             const resultsColumn = document.getElementById('results-column');
+            let __syncing = false;
+            let __observer = null;
+            // #region agent log
+            const __agentLog = (hypothesisId, message, data) => {{
+                fetch('http://localhost:7243/ingest/9ee15b4b-d4c5-4bd0-8443-e566ed3e8dee', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{
+                        sessionId: 'debug-session',
+                        runId: 'align-debug',
+                        hypothesisId,
+                        location: 'app.py:1852',
+                        message,
+                        data,
+                        timestamp: Date.now()
+                    }})
+                }}).catch(() => {{}});
+            }};
+            // #endregion
+
+            // #region agent log
+            const logAlignment = (reason) => {{
+                if (!sidebar || !resultsColumn) return;
+                const heading = resultsColumn.querySelector('h1, h2, h3, h4');
+                const sidebarRect = sidebar.getBoundingClientRect();
+                const resultsRect = resultsColumn.getBoundingClientRect();
+                const headingRect = heading ? heading.getBoundingClientRect() : null;
+                const resultsStyle = window.getComputedStyle(resultsColumn);
+                __agentLog('H5', 'alignment:measure', {{
+                    reason,
+                    sidebarLeft: sidebarRect.left,
+                    resultsLeft: resultsRect.left,
+                    resultsPaddingLeft: resultsStyle.paddingLeft,
+                    headingLeft: headingRect ? headingRect.left : null,
+                    headingText: heading ? heading.textContent.trim().slice(0, 50) : null
+                }});
+            }};
+            // #endregion
+
+            function syncColumnHeights(reason) {{
+                if (!sidebar || !resultsColumn) return;
+                if (__syncing) return;
+                __syncing = true;
+                // #region agent log
+                __agentLog('H1', 'syncColumnHeights:enter', {{
+                    reason,
+                    sidebarDisplay: sidebar.style.display,
+                    sidebarH: sidebar.offsetHeight,
+                    resultsH: resultsColumn.offsetHeight
+                }});
+                // #endregion
+                if (__observer) __observer.disconnect();
+                
+                // Reset any previous height settings
+                resultsColumn.style.minHeight = '';
+                resultsColumn.style.height = '';
+                
+                // Get sidebar natural height (this is our target height)
+                const sidebarHeight = sidebar.offsetHeight;
+                
+                // Get Results container (white-container inside results-column)
+                const resultsContainer = resultsColumn.querySelector('.white-container') || resultsColumn;
+                
+                // Calculate fixed elements height in Results column
+                const resultsTitle = resultsContainer.querySelector('h3, .custom-markdown');
+                const downloadBtn = resultsContainer.querySelector('.download-btn-container');
+                
+                let fixedHeight = 32;  // Container padding (16px top + 16px bottom)
+                if (resultsTitle) fixedHeight += resultsTitle.offsetHeight + 16;
+                if (downloadBtn) fixedHeight += downloadBtn.offsetHeight + 8;
+                
+                // Calculate available height for scrollable content
+                const scrollableMaxHeight = Math.max(300, sidebarHeight - fixedHeight);
+                
+                // Apply max-height to OCR Gallery and JSON container
+                const ocrGallery = document.querySelector('.ocr-result-gallery-vertical');
+                const jsonContainer = document.getElementById('json-output-scrollable');
+                
+                if (ocrGallery) {{
+                    ocrGallery.style.maxHeight = `${{scrollableMaxHeight}}px`;
+                }}
+                if (jsonContainer) {{
+                    jsonContainer.style.maxHeight = `${{scrollableMaxHeight}}px`;
+                }}
+                
+                // Sync both columns to sidebar height
+                resultsColumn.style.minHeight = `${{sidebarHeight}}px`;
+                
+                // Also set the inner container
+                if (resultsContainer && resultsContainer !== resultsColumn) {{
+                    resultsContainer.style.minHeight = `${{sidebarHeight}}px`;
+                }}
+                
+                if (__observer) __observer.observe(resultsColumn, {{ childList: true, subtree: true }});
+                __syncing = false;
+                // #region agent log
+                __agentLog('H1', 'syncColumnHeights:exit', {{
+                    sidebarHeight,
+                    fixedHeight,
+                    scrollableMaxHeight,
+                    hasOcrGallery: !!ocrGallery,
+                    hasJsonContainer: !!jsonContainer,
+                    sidebarFinalH: sidebar.offsetHeight,
+                    resultsFinalH: resultsColumn.offsetHeight
+                }});
+                // #endregion
+            }}
+
             
             if (toggleBtn && sidebar) {{
                 toggleBtn.addEventListener('click', () => {{
@@ -1733,6 +2364,7 @@ with gr.Blocks(css=CSS, title=TITLE, theme=paddle_theme, head=FORCE_EN_SCRIPT) a
                         }}
                         if (icon) icon.textContent = '◀';
                         if (text) text.textContent = 'HIDE LEFT MENU';
+                        setTimeout(() => syncColumnHeights('toggle:show'), 50);
                     }} else {{
                         // Hide: animate to 90%, then apply display:none
                         sidebar.classList.add('sidebar-hidden');
@@ -1748,8 +2380,40 @@ with gr.Blocks(css=CSS, title=TITLE, theme=paddle_theme, head=FORCE_EN_SCRIPT) a
                         }}
                         if (icon) icon.textContent = '▶';
                         if (text) text.textContent = 'SHOW LEFT MENU';
+                        setTimeout(() => syncColumnHeights('toggle:hide'), 350);
                     }}
                 }});
+            }}
+
+            // Delay initialization to ensure Gradio components are fully rendered
+            setTimeout(() => {{
+                syncColumnHeights('init');
+                logAlignment('init');
+            }}, 100);
+            requestAnimationFrame(() => logAlignment('raf'));
+            window.addEventListener('resize', () => {{
+                clearTimeout(window.__syncColumnsTimer);
+                // #region agent log
+                __agentLog('H2', 'window:resize', {{
+                    width: window.innerWidth,
+                    height: window.innerHeight,
+                    dpr: window.devicePixelRatio
+                }});
+                // #endregion
+                window.__syncColumnsTimer = setTimeout(() => syncColumnHeights('resize'), 100);
+            }});
+
+            if (resultsColumn) {{
+                __observer = new MutationObserver((mutations) => {{
+                    // #region agent log
+                    __agentLog('H3', 'resultsColumn:mutations', {{
+                        count: mutations.length
+                    }});
+                    // #endregion
+                    syncColumnHeights('mutations');
+                    logAlignment('mutations');
+                }});
+                __observer.observe(resultsColumn, {{ childList: true, subtree: true }});
             }}
             
             const tooltipTexts = {TOOLTIP_RADIO};
@@ -1758,10 +2422,10 @@ with gr.Blocks(css=CSS, title=TITLE, theme=paddle_theme, head=FORCE_EN_SCRIPT) a
                 tooltip = document.createElement("div");
                 tooltip.id = "custom-tooltip";
                 tooltip.style.position = "fixed";
-                tooltip.style.background = "rgba(0, 0, 0, 0.75)";
-                tooltip.style.color = "white";
-                tooltip.style.padding = "6px 10px";
-                tooltip.style.borderRadius = "4px";
+                tooltip.style.background = "#ffffff";
+                tooltip.style.color = "#140E35";
+                tooltip.style.padding = "8px 12px";
+                tooltip.style.borderRadius = "6px";
                 tooltip.style.fontSize = "13px";
                 tooltip.style.maxWidth = "300px";
                 tooltip.style.zIndex = "10000";
@@ -1769,6 +2433,8 @@ with gr.Blocks(css=CSS, title=TITLE, theme=paddle_theme, head=FORCE_EN_SCRIPT) a
                 tooltip.style.transition = "opacity 0.2s";
                 tooltip.style.opacity = "0";
                 tooltip.style.whiteSpace = "normal";
+                tooltip.style.boxShadow = "0 2px 8px rgba(0, 0, 0, 0.15)";
+                tooltip.style.border = "1px solid #E8EDF6";
                 document.body.appendChild(tooltip);
             }}
             Object.keys(tooltipTexts).forEach(id => {{

@@ -41,13 +41,18 @@ else
     CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DDXOCR_BUILD_TESTS=OFF"
 fi
 
+INSTALL_PREFIX="$(pwd)"
+
 if [ "$BUILD_TYPE" = "Debug" ]; then
-    cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} ${CMAKE_EXTRA_ARGS}
+    cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DCMAKE_INSTALL_PREFIX=${INSTALL_PREFIX} ${CMAKE_EXTRA_ARGS}
 else
-    cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DENABLE_DEBUG_INFO=ON ${CMAKE_EXTRA_ARGS}
+    cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DCMAKE_INSTALL_PREFIX=${INSTALL_PREFIX} -DENABLE_DEBUG_INFO=ON ${CMAKE_EXTRA_ARGS}
 fi
 make -j$(nproc)
-make install
+
+# make install
+# 注意：跳过 make install，可执行文件已直接输出到 bin/ 目录
+# 如需安装到系统目录，请手动执行: make install
 
 echo "✅ Build complete: ${BUILD_DIR}/bin"
 

@@ -6,12 +6,9 @@
 
 - [功能特性](#-功能特性)
 - [前置条件](#-前置条件)
-- [安装和设置](#-安装和设置)
-- [运行方式](#-运行方式)
-- [环境变量配置](#-环境变量配置)
+- [快速启动](#-快速启动)
 - [目录结构](#-目录结构)
 - [使用说明](#-使用说明)
-- [常见问题](#-常见问题)
 
 ## ✨ 功能特性
 
@@ -34,7 +31,6 @@
   - 完整结果 ZIP 下载 (包含 OCR 图像、原始图像、JSON 数据)
 - **响应式 UI**: 
   - 侧边栏折叠功能 (HIDE/SHOW LEFT MENU)
-  - 移动端适配
   - 自定义 PaddleOCR 风格主题
 
 ## 🔧 前置条件
@@ -44,123 +40,39 @@
 此 Web UI 需要与后端 OCR 服务器通信，请先启动 OCR 服务器：
 
 ```bash
-cd /home/deepx/Desktop/ocr_demo
+cd server
 
-# 设置环境变量
-source ./set_env.sh 1 2 1 3 2 4
-
-# 启动服务
-cd build_Release
-LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$(pwd)/../3rd-party/pdfium/lib ./bin/ocr_server --port 8080
+# 使用默认配置启动（端口 8080，Server 模型）
+./run_server.sh
 ```
 
-### 2. 验证服务运行
-
-```bash
-curl http://localhost:8080/health
-# 响应: {"status": "healthy", "service": "DeepX OCR Server", "version": "1.0.0"}
-```
-
-### 3. 系统要求
+### 2. 系统要求
 
 - **Python**: 3.10 或更高版本
 - **内存**: 最少 2GB RAM
 - **磁盘空间**: 约 500MB
 
-## 📦 安装和设置
-
-### 1. 进入 WebUI 目录
+## 🚀 快速启动
 
 ```bash
-cd /home/deepx/Desktop/ocr_demo/server/webui
-```
+# 进入 WebUI 目录
+cd server/webui
 
-### 2. 创建 Python 虚拟环境
-
-```bash
-# 创建虚拟环境
+# 创建 Python 虚拟环境
 python3 -m venv venv
 
-# 激活虚拟环境 (Linux/macOS)
-source venv/bin/activate
-
-# 激活虚拟环境 (Windows)
-venv\Scripts\activate
-```
-
-### 3. 安装依赖
-
-```bash
-pip install --upgrade pip
-pip install -r requirements.txt
-```
-
-**主要依赖** (requirements.txt):
-- `pillow>=10.0.0`: 图像处理
-- `requests>=2.31.0`: HTTP 通信
-- `gradio==5.30.0`: Web UI 框架
-
-## 🚀 运行方式
-
-### 1. 基本运行 (本地 OCR Server)
-
-当 OCR 服务器运行在 `localhost:8080` 时：
-
-```bash
 # 激活虚拟环境
 source venv/bin/activate
 
-# 运行应用
+# 安装依赖
+pip install --upgrade pip
+pip install -r requirements.txt
+
+# 启动 WebUI（默认连接 localhost:8080 的 OCR Server）
 python app.py
 ```
 
-### 2. 指定自定义 OCR Server URL
-
-当 OCR 服务器运行在不同主机或端口时：
-
-```bash
-# 通过环境变量指定 API URL
-export API_URL="http://192.168.1.100:8080/ocr"
-export API_BASE="http://192.168.1.100:8080"
-python app.py
-```
-
-### 3. 访问 Web 界面
-
-服务启动后，在浏览器中访问：
-
-```
-http://localhost:7860
-```
-
-## 🔑 环境变量配置
-
-| 变量名 | 说明 | 默认值 |
-|--------|------|--------|
-| `API_URL` | OCR API 端点 | `http://localhost:8080/ocr` |
-| `API_BASE` | OCR 服务器基础 URL | `http://localhost:8080` |
-| `API_TOKEN` | API 认证令牌 | `deepx_token` |
-
-### 配置示例
-
-```bash
-# 方式1: 命令行设置 (推荐)
-export API_URL="http://192.168.1.100:8080/ocr"
-export API_BASE="http://192.168.1.100:8080"
-export API_TOKEN="your_token_here"
-python app.py
-
-# 方式2: 使用脚本文件
-cat > run_webui.sh << EOF
-#!/bin/bash
-export API_URL="http://192.168.1.100:8080/ocr"
-export API_BASE="http://192.168.1.100:8080"
-export API_TOKEN="your_token_here"
-python app.py
-EOF
-chmod +x run_webui.sh
-./run_webui.sh
-```
+**访问 WebUI**: 在浏览器中打开 **http://localhost:7860**
 
 ## 📁 目录结构
 
@@ -230,70 +142,3 @@ webui/
 ### 5. 展开结果视图
 - 点击左侧边缘的 "HIDE LEFT MENU" 按钮可隐藏左侧菜单，全屏查看结果
 - 再次点击 "SHOW LEFT MENU" 可恢复左侧菜单
-
-## 🐛 常见问题
-
-### 1. 连接 OCR Server 失败
-
-**症状**: `API 请求失败` 或 `OCR processing failed` 错误
-
-**解决方案**:
-```bash
-# 检查 OCR 服务器状态
-curl http://localhost:8080/health
-
-# 如果服务器未运行，启动它
-cd /home/deepx/Desktop/ocr_demo/build_Release
-LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$(pwd)/../3rd-party/pdfium/lib ./bin/ocr_server --port 8080
-```
-
-### 2. 端口冲突
-
-**症状**: `Address already in use` 错误
-
-**解决方案**:
-```bash
-# 检查占用端口 7860 的进程
-lsof -i :7860
-
-# 终止占用进程
-kill -9 <PID>
-
-# 或修改 app.py 末尾的 server_port 使用不同端口
-```
-
-### 3. 依赖安装失败
-
-**解决方案**:
-```bash
-# 升级 pip
-pip install --upgrade pip
-
-# 单独安装依赖
-pip install pillow>=10.0.0
-pip install requests>=2.31.0
-pip install gradio==5.30.0
-```
-
-### 4. PDF 处理内存不足
-
-**症状**: 处理大型 PDF 时程序崩溃或响应缓慢
-
-**解决方案**:
-- 降低 PDF Render DPI (建议 150)
-- 减少 PDF Max Pages (建议 10 以内)
-- A4 页面 @ 150 DPI 约占用 8.7MB/页
-
-### 5. 示例文件无法显示
-
-**解决方案**:
-```bash
-# 确保 examples/ 和 examples_pdf/ 目录存在且有文件
-ls -la examples/
-ls -la examples_pdf/
-
-# 确保文件权限正确
-chmod 644 examples/*
-chmod 644 examples_pdf/*
-```
-
