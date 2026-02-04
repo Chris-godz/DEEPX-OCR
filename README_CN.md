@@ -181,9 +181,9 @@ python3 benchmark/run_benchmark.py --model mobile
 **详细报告**：
 | 配置 | Server | Mobile |
 |---|---|---|
-| 单卡 | [报告](docs/results/local/x86/DXNN-OCR_benchmark_report_singlecard_server.md) | [报告](docs/results/local/x86/DXNN-OCR_benchmark_report_singlecard_mobile.md) |
-| 双卡 | [报告](docs/results/local/x86/DXNN-OCR_benchmark_report_dualcards_server.md) | [报告](docs/results/local/x86/DXNN-OCR_benchmark_report_dualcards_mobile.md) |
-| 三卡 | [报告](docs/results/local/x86/DXNN-OCR_benchmark_report_threecards_server.md) | [报告](docs/results/local/x86/DXNN-OCR_benchmark_report_threecards_mobile.md) |
+| 单卡 | [报告](docs/results/local/x86/server/DXNN-OCR_benchmark_report_singlecard.md) | [报告](docs/results/local/x86/mobile/DXNN-OCR_benchmark_report_singlecard.md) |
+| 双卡 | [报告](docs/results/local/x86/server/DXNN-OCR_benchmark_report_dualcards.md) | [报告](docs/results/local/x86/mobile/DXNN-OCR_benchmark_report_dualcards.md) |
+| 三卡 | [报告](docs/results/local/x86/server/DXNN-OCR_benchmark_report_threecards.md) | [报告](docs/results/local/x86/mobile/DXNN-OCR_benchmark_report_threecards.md) |
 
 ---
 
@@ -203,8 +203,8 @@ python3 benchmark/run_benchmark.py --model mobile
 **详细报告**：
 | 模型 | 报告 |
 |---|---|
-| Server | [报告](docs/results/local/arm/DXNN-OCR_benchmark_report_server.md) |
-| Mobile | [报告](docs/results/local/arm/DXNN-OCR_benchmark_report_mobile.md) |
+| Server | [报告](docs/results/local/arm/server/DXNN-OCR_benchmark_report.md) |
+| Mobile | [报告](docs/results/local/arm/mobile/DXNN-OCR_benchmark_report.md) |
 
 <details>
 <summary><b>🔄 复现基准测试结果</b></summary>
@@ -247,37 +247,44 @@ python3 benchmark/run_benchmark.py --model mobile --runs 60 \
 
 **测试配置**（所有报告一致）：
 - 模式：吞吐量（throughput）
-- 并发数：10
+- 并发数：20
 - 每样本运行次数：20
 
 #### x86 平台
 
+**Server 模型：**
 | 配置 | QPS | 成功率 | CPS（字符/秒） | 准确率 | 平均延迟 (ms) | P50 (ms) | P99 (ms) |
 |---|--:|---:|---:|---:|---:|---:|---:|
-| 单卡 | 2.04 | 100% | 984.43 | 86.06% | 4846.49 | 4567.16 | 13053.77 |
-| 双卡 | 3.71 | 100% | 1764.40 | 86.06% | 2660.18 | 2422.49 | 7143.42 |
-| 三卡 | 4.48 | 100% | 2158.43 | 86.06% | 2209.89 | 1956.82 | 6652.21 |
+| 单卡 | 7.64 | 100% | 236.88 | 96.93% | 2594.17 | 2618.61 | 3498.46 |
+| 双卡 | 13.62 | 100% | 401.24 | 89.60% | 1423.65 | 1438.99 | 1786.95 |
+| 三卡 | 21.50 | 100% | 605.96 | 96.93% | 900.14 | 907.47 | 1517.51 |
+
+**Mobile 模型：**
+| 配置 | QPS | 成功率 | CPS（字符/秒） | 准确率 | 平均延迟 (ms) | P50 (ms) | P99 (ms) |
+|---|--:|---:|---:|---:|---:|---:|---:|
+| 单卡 | 13.62 | 100% | 401.24 | 89.60% | 1423.65 | 1438.99 | 1786.95 |
+| 双卡 | 23.97 | 100% | 692.24 | 89.60% | 788.05 | 763.87 | 1586.34 |
+| 三卡 | 28.00 | 100% | 801.66 | 89.60% | 635.59 | 564.74 | 1299.82 |
 
 **详细报告**：
-| 配置 | 报告 |
-|---|---|
-| 单卡 | [报告](docs/results/server/x86/DXNN-OCR_Server_benchmark_report_singlecard.md) |
-| 双卡 | [报告](docs/results/server/x86/DXNN-OCR_Server_benchmark_report_dualcards.md) |
-| 三卡 | [报告](docs/results/server/x86/DXNN-OCR_Server_benchmark_report_threecards.md) |
+| 配置 | Server | Mobile |
+|---|---|---|
+| 单卡 | [报告](docs/results/server/x86/server/DXNN-OCR_Server_benchmark_report_singlecard.md) | [报告](docs/results/server/x86/mobile/DXNN-OCR_Server_benchmark_report_singlecard.md) |
+| 双卡 | [报告](docs/results/server/x86/server/DXNN-OCR_Server_benchmark_report_dualcards.md) | [报告](docs/results/server/x86/mobile/DXNN-OCR_Server_benchmark_report_dualcards.md) |
+| 三卡 | [报告](docs/results/server/x86/server/DXNN-OCR_Server_benchmark_report_threecards.md) | [报告](docs/results/server/x86/mobile/DXNN-OCR_Server_benchmark_report_threecards.md) |
 
 #### ARM 平台（Rockchip aarch64）
 
-| 指标 | 数值 |
-|---|--:|
-| **QPS** | 2.06 |
-| 成功率 | 100% |
-| CPS（字符/秒） | 990.53 |
-| 准确率 | 86.09% |
-| 平均延迟 (ms) | 4809.76 |
-| P50 (ms) | 4306.95 |
-| P99 (ms) | 13366.27 |
+| 模型 | QPS | 成功率 | CPS（字符/秒） | 准确率 | 平均延迟 (ms) | P50 (ms) | P99 (ms) |
+|---|--:|---:|---:|---:|---:|---:|---:|
+| Server | 7.45 | 100% | 225.62 | 96.82% | 2635.66 | 2646.28 | 4270.81 |
+| Mobile | 16.11 | 100% | 469.57 | 89.37% | 1192.55 | 1200.13 | 1673.76 |
 
-**详细报告**：[报告](docs/results/server/arm/DXNN-OCR_Server_benchmark_report.md)
+**详细报告**：
+| 模型 | 报告 |
+|---|---|
+| Server | [报告](docs/results/server/arm/server/DXNN-OCR_Server_benchmark_report.md) |
+| Mobile | [报告](docs/results/server/arm/mobile/DXNN-OCR_Server_benchmark_report.md) |
 
 <details>
 <summary><b>🔄 复现 API 服务器基准测试结果</b></summary>

@@ -31,6 +31,7 @@ scenario:
   duration_seconds: 0  # 0 表示运行完所有样本
   runs_per_sample: 1
   warmup_requests: 5
+  poll_interval: 0.005 # 轮询间隔（秒）
   
   # 压力测试专用
   ramp_up_seconds: 0

@@ -181,9 +181,9 @@ python3 benchmark/run_benchmark.py --model mobile
 **Detailed Reports**:
 | Setup | Server | Mobile |
 |---|---|---|
-| Single Card | [Report](docs/results/local/x86/DXNN-OCR_benchmark_report_singlecard_server.md) | [Report](docs/results/local/x86/DXNN-OCR_benchmark_report_singlecard_mobile.md) |
-| Dual Cards | [Report](docs/results/local/x86/DXNN-OCR_benchmark_report_dualcards_server.md) | [Report](docs/results/local/x86/DXNN-OCR_benchmark_report_dualcards_mobile.md) |
-| Three Cards | [Report](docs/results/local/x86/DXNN-OCR_benchmark_report_threecards_server.md) | [Report](docs/results/local/x86/DXNN-OCR_benchmark_report_threecards_mobile.md) |
+| Single Card | [Report](docs/results/local/x86/server/DXNN-OCR_benchmark_report_singlecard.md) | [Report](docs/results/local/x86/mobile/DXNN-OCR_benchmark_report_singlecard.md) |
+| Dual Cards | [Report](docs/results/local/x86/server/DXNN-OCR_benchmark_report_dualcards.md) | [Report](docs/results/local/x86/mobile/DXNN-OCR_benchmark_report_dualcards.md) |
+| Three Cards | [Report](docs/results/local/x86/server/DXNN-OCR_benchmark_report_threecards.md) | [Report](docs/results/local/x86/mobile/DXNN-OCR_benchmark_report_threecards.md) |
 
 ---
 
@@ -219,7 +219,7 @@ To reproduce the benchmark results above, run the following commands:
 ./setup.sh
 
 # 3. Set DXRT environment variables (example)
-source ./set_env.sh 3 2 1 3 2 4
+source ./set_env.sh 1 2 1 3 2 4
 
 # 4. Run benchmark (server model, 60 runs per image)
 python3 benchmark/run_benchmark.py --model server --runs 60 \
@@ -247,37 +247,44 @@ python3 benchmark/run_benchmark.py --model mobile --runs 60 \
 
 **Test configuration** (same across all reports):
 - Mode: throughput
-- Concurrency: 10
+- Concurrency: 20
 - Runs per sample: 20
 
 #### x86 Platform
 
+**Server Model:**
 | Setup | QPS | Success Rate | CPS (chars/s) | Accuracy | Avg Latency (ms) | P50 (ms) | P99 (ms) |
 |---|--:|---:|---:|---:|---:|---:|---:|
-| Single Card | 2.04 | 100% | 984.43 | 86.06% | 4846.49 | 4567.16 | 13053.77 |
-| Dual Cards | 3.71 | 100% | 1764.40 | 86.06% | 2660.18 | 2422.49 | 7143.42 |
-| Three Cards | 4.48 | 100% | 2158.43 | 86.06% | 2209.89 | 1956.82 | 6652.21 |
+| Single Card | 7.64 | 100% | 236.88 | 96.93% | 2594.17 | 2618.61 | 3498.46 |
+| Dual Cards | 13.62 | 100% | 401.24 | 89.60% | 1423.65 | 1438.99 | 1786.95 |
+| Three Cards | 21.50 | 100% | 605.96 | 96.93% | 900.14 | 907.47 | 1517.51 |
+
+**Mobile Model:**
+| Setup | QPS | Success Rate | CPS (chars/s) | Accuracy | Avg Latency (ms) | P50 (ms) | P99 (ms) |
+|---|--:|---:|---:|---:|---:|---:|---:|
+| Single Card | 13.62 | 100% | 401.24 | 89.60% | 1423.65 | 1438.99 | 1786.95 |
+| Dual Cards | 23.97 | 100% | 692.24 | 89.60% | 788.05 | 763.87 | 1586.34 |
+| Three Cards | 28.00 | 100% | 801.66 | 89.60% | 635.59 | 564.74 | 1299.82 |
 
 **Detailed reports**:
-| Setup | Report |
-|---|---|
-| Single Card | [Report](docs/results/server/x86/DXNN-OCR_Server_benchmark_report_singlecard.md) |
-| Dual Cards | [Report](docs/results/server/x86/DXNN-OCR_Server_benchmark_report_dualcards.md) |
-| Three Cards | [Report](docs/results/server/x86/DXNN-OCR_Server_benchmark_report_threecards.md) |
+| Setup | Server | Mobile |
+|---|---|---|
+| Single Card | [Report](docs/results/server/x86/server/DXNN-OCR_Server_benchmark_report_singlecard.md) | [Report](docs/results/server/x86/mobile/DXNN-OCR_Server_benchmark_report_singlecard.md) |
+| Dual Cards | [Report](docs/results/server/x86/server/DXNN-OCR_Server_benchmark_report_dualcards.md) | [Report](docs/results/server/x86/mobile/DXNN-OCR_Server_benchmark_report_dualcards.md) |
+| Three Cards | [Report](docs/results/server/x86/server/DXNN-OCR_Server_benchmark_report_threecards.md) | [Report](docs/results/server/x86/mobile/DXNN-OCR_Server_benchmark_report_threecards.md) |
 
 #### ARM Platform (Rockchip aarch64)
 
-| Metric | Value |
-|---|--:|
-| **QPS** | 2.06 |
-| Success Rate | 100% |
-| CPS (chars/s) | 990.53 |
-| Accuracy | 86.09% |
-| Avg Latency (ms) | 4809.76 |
-| P50 (ms) | 4306.95 |
-| P99 (ms) | 13366.27 |
+| Model | QPS | Success Rate | CPS (chars/s) | Accuracy | Avg Latency (ms) | P50 (ms) | P99 (ms) |
+|---|--:|---:|---:|---:|---:|---:|---:|
+| Server | 7.45 | 100% | 225.62 | 96.82% | 2635.66 | 2646.28 | 4270.81 |
+| Mobile | 16.11 | 100% | 469.57 | 89.37% | 1192.55 | 1200.13 | 1673.76 |
 
-**Detailed report**: [Report](docs/results/server/arm/DXNN-OCR_Server_benchmark_report.md)
+**Detailed reports**:
+| Model | Report |
+|---|---|
+| Server | [Report](docs/results/server/arm/server/DXNN-OCR_Server_benchmark_report.md) |
+| Mobile | [Report](docs/results/server/arm/mobile/DXNN-OCR_Server_benchmark_report.md) |
 
 <details>
 <summary><b>🔄 Reproduce API Server Benchmark Results</b></summary>

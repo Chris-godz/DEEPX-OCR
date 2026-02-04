@@ -27,9 +27,14 @@ logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).parent.resolve()
 
 # ============ API 配置 (修改为 DeepX OCR Server) ============
-API_URL = os.environ.get("API_URL", "http://localhost:8080/ocr")
 API_BASE = os.environ.get("API_BASE", "http://localhost:8080")
+API_SUBMIT_URL = os.environ.get("API_SUBMIT_URL", f"{API_BASE}/ocr/submit")
+API_RESULT_URL = os.environ.get("API_RESULT_URL", f"{API_BASE}/ocr/result")
 TOKEN = os.environ.get("API_TOKEN", "deepx_token")
+
+# 异步轮询配置
+POLL_INTERVAL = 0.5  # 轮询间隔（秒）
+POLL_TIMEOUT = 300   # 轮询超时（秒）
 
 TITLE = "DeepX OCR Server Demo"
 
@@ -1457,7 +1462,90 @@ def bytes_to_image(image_bytes):
     return Image.open(io.BytesIO(image_bytes))
 
 
-# ============ API 处理函数 (适配 DeepX OCR Server) ============
+# ============ API 处理函数 (适配 DeepX OCR Server - 异步模式) ============
+
+def submit_ocr_task(request_body, headers):
+    """
+    提交 OCR 任务到异步接口
+    
+    Args:
+        request_body: 请求体
+        headers: 请求头
+        
+    Returns:
+        (task_id, task_type) 元组，失败返回 (None, None)
+    """
+    response = requests.post(
+        API_SUBMIT_URL,
+        json=request_body,
+        headers=headers,
+        timeout=30,
+    )
+    
+    response.raise_for_status()
+    result = response.json()
+    
+    if result.get("errorCode", 0) != 0:
+        raise gr.Error(f"Task submission failed: {result.get('errorMsg', 'Unknown error')}")
+    
+    task_id = result.get("taskId")
+    task_type = result.get("taskType", "image")
+    
+    logger.info(f"[API] 任务已提交: task_id={task_id}, task_type={task_type}")
+    return task_id, task_type
+
+
+def poll_ocr_result(task_id, headers, timeout=POLL_TIMEOUT, interval=POLL_INTERVAL):
+    """
+    轮询获取 OCR 任务结果
+    
+    Args:
+        task_id: 任务 ID
+        headers: 请求头
+        timeout: 超时时间（秒）
+        interval: 轮询间隔（秒）
+        
+    Returns:
+        API 响应结果 JSON
+    """
+    import time
+    start_time = time.time()
+    result_url = f"{API_RESULT_URL}/{task_id}"
+    
+    while True:
+        elapsed = time.time() - start_time
+        if elapsed > timeout:
+            raise gr.Error(f"OCR processing timeout after {timeout} seconds")
+        
+        response = requests.get(result_url, headers=headers, timeout=30)
+        
+        if response.status_code == 404:
+            raise gr.Error(f"Task not found: {task_id}")
+        
+        response.raise_for_status()
+        result = response.json()
+        
+        status = result.get("status", "")
+        
+        # 202 表示仍在处理中
+        if response.status_code == 202 or status == "processing":
+            logger.debug(f"[API] 任务处理中: task_id={task_id}, elapsed={elapsed:.1f}s")
+            time.sleep(interval)
+            continue
+        
+        # 200 表示处理完成
+        if response.status_code == 200 or status == "completed":
+            logger.info(f"[API] 任务完成: task_id={task_id}, elapsed={elapsed:.1f}s")
+            return result
+        
+        # 其他错误
+        if result.get("errorCode", 0) != 0:
+            raise gr.Error(f"OCR processing failed: {result.get('errorMsg', 'Unknown error')}")
+        
+        # 未知状态，继续轮询
+        time.sleep(interval)
+
+
 def process_file(
     file_path,
     image_input,
@@ -1533,20 +1621,14 @@ def process_file(
             request_body["pdfDpi"] = int(pdf_dpi)
             request_body["pdfMaxPages"] = int(pdf_max_pages)
 
-        response = requests.post(
-            API_URL,
-            json=request_body,
-            headers=headers,
-            timeout=300,
-        )
+        # Step 1: 提交任务
+        task_id, task_type = submit_ocr_task(request_body, headers)
         
-        try:
-            response.raise_for_status()
-        except requests.exceptions.RequestException as e:
-            raise RuntimeError(f"API request failed: {response.text}") from e
+        if task_id is None:
+            raise gr.Error("Failed to submit OCR task")
         
-        # Parse API response
-        result = response.json()
+        # Step 2: 轮询获取结果
+        result = poll_ocr_result(task_id, headers)
         
         if result.get("errorCode", 0) != 0:
             raise gr.Error(f"OCR processing failed: {result.get('errorMsg', 'Unknown error')}")

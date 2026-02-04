@@ -97,6 +97,10 @@ Test Modes:
     parser.add_argument("--concurrency-step", type=int,
                         help="并发步长（stress/capacity）")
     
+    # 轮询参数
+    parser.add_argument("--poll-interval", type=float, default=0.005,
+                        help="异步模式轮询间隔（秒），默认 0.005")
+    
     # OCR 参数
     parser.add_argument("--pdf-dpi", type=int,
                         help="PDF 渲染 DPI")
@@ -154,6 +158,10 @@ def merge_config_with_args(config: BenchmarkConfig, args) -> BenchmarkConfig:
         config.scenario.ramp_up_seconds = args.ramp_up
     if args.concurrency_step is not None:
         config.scenario.concurrency_step = args.concurrency_step
+    
+    # 轮询参数
+    if args.poll_interval:
+        config.scenario.poll_interval = args.poll_interval
     
     # OCR 参数
     if args.pdf_dpi:

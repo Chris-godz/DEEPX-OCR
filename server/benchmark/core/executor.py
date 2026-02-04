@@ -200,10 +200,12 @@ class LatencyTestExecutor(TestExecutor):
                     self.samples[0]['base64'],
                     self._ocr_params_for_sample(self.samples[0]),
                     self.config.scenario.warmup_requests,
-                    concurrency=1
+                    concurrency=1,
+                    poll_interval=self.config.scenario.poll_interval
                 )
             
             body_by_name = self._build_body_by_name()
+            poll_interval = self.config.scenario.poll_interval
             # 串行执行
             request_id = 0
             for idx, sample in enumerate(self.samples):
@@ -212,7 +214,8 @@ class LatencyTestExecutor(TestExecutor):
                 for run_idx in range(self.config.scenario.runs_per_sample):
                     result = await client.send_ocr_request(
                         body_by_name[sample['name']],
-                        request_id
+                        request_id,
+                        poll_interval=poll_interval
                     )
                     
                     # 记录指标
@@ -253,11 +256,12 @@ class ThroughputTestExecutor(TestExecutor):
     async def run(self) -> Tuple[MetricsCollector, ResourceMonitor]:
         """运行吞吐量测试"""
         print("\n" + "=" * 70)
-        print("THROUGHPUT TEST (Concurrent Mode)")
+        print("THROUGHPUT TEST (Concurrent Mode - Async Submit+Poll)")
         print("=" * 70)
         print(f"Samples: {len(self.samples)}")
         print(f"Runs per sample: {self.config.scenario.runs_per_sample}")
         print(f"Concurrency: {self.config.scenario.concurrency}")
+        print(f"Poll interval: {self.config.scenario.poll_interval * 1000:.1f}ms")
         print("=" * 70 + "\n")
         
         collector = MetricsCollector(test_name=self.config.scenario.name)
@@ -266,11 +270,14 @@ class ThroughputTestExecutor(TestExecutor):
         if self.config.monitor.enable_system_monitor:
             await monitor.start()
         
+        
+        max_conn = self.config.scenario.concurrency * 4
+        
         async with AsyncHTTPClient(
             base_url=self.config.server.url,
             token=self.config.server.token,
             timeout=self.config.server.timeout,
-            max_connections=self.config.scenario.concurrency * 2,
+            max_connections=max_conn,
             verify_ssl=self.config.server.verify_ssl
         ) as client:
             # 健康检查
@@ -282,7 +289,8 @@ class ThroughputTestExecutor(TestExecutor):
                     self.samples[0]['base64'],
                     self._ocr_params_for_sample(self.samples[0]),
                     self.config.scenario.warmup_requests,
-                    concurrency=self.config.scenario.concurrency
+                    concurrency=self.config.scenario.concurrency,
+                    poll_interval=self.config.scenario.poll_interval
                 )
             
             body_by_name = self._build_body_by_name()
@@ -305,16 +313,18 @@ class ThroughputTestExecutor(TestExecutor):
             # 使用信号量控制并发
             semaphore = asyncio.Semaphore(self.config.scenario.concurrency)
             completed = [0]
+            poll_interval = self.config.scenario.poll_interval
             
             async def bounded_request(task_info):
                 """带并发限制的请求"""
                 async with semaphore:
                     start_time = time.time()
+                    
                     result = await client.send_ocr_request(
                         task_info['body'],
-                        task_info['request_id']
+                        task_info['request_id'],
+                        poll_interval=poll_interval
                     )
-                    sample = task_info['sample']
                     
                     end_time = time.time()
                     
@@ -385,12 +395,14 @@ class StressTestExecutor(TestExecutor):
             verify_ssl=self.config.server.verify_ssl
         ) as client:
             await client.health_check()
+            poll_interval = self.config.scenario.poll_interval
             if self.config.scenario.warmup_requests > 0 and self.samples:
                 await client.warmup(
                     self.samples[0]["base64"],
                     self._ocr_params_for_sample(self.samples[0]),
                     self.config.scenario.warmup_requests,
                     concurrency=1,
+                    poll_interval=poll_interval,
                 )
             
             body_by_name = self._build_body_by_name()
@@ -419,6 +431,7 @@ class StressTestExecutor(TestExecutor):
                                 result = await client.send_ocr_request(
                                     body_by_name[sample["name"]],
                                     rid,
+                                    poll_interval=poll_interval,
                                 )
                                 end = time.time()
                                 m = RequestMetrics(
@@ -461,6 +474,7 @@ class StressTestExecutor(TestExecutor):
                             result = await client.send_ocr_request(
                                 task_info["body"],
                                 task_info["request_id"],
+                                poll_interval=poll_interval,
                             )
                             end = time.time()
                             m = RequestMetrics(
@@ -529,12 +543,14 @@ class StabilityTestExecutor(TestExecutor):
             verify_ssl=self.config.server.verify_ssl
         ) as client:
             await client.health_check()
+            poll_interval = self.config.scenario.poll_interval
             if self.config.scenario.warmup_requests > 0 and self.samples:
                 await client.warmup(
                     self.samples[0]["base64"],
                     self._ocr_params_for_sample(self.samples[0]),
                     self.config.scenario.warmup_requests,
                     concurrency=1,
+                    poll_interval=poll_interval,
                 )
             
             body_by_name = self._build_body_by_name()
@@ -553,6 +569,7 @@ class StabilityTestExecutor(TestExecutor):
                         result = await client.send_ocr_request(
                             body_by_name[sample["name"]],
                             rid,
+                            poll_interval=poll_interval,
                         )
                         end = time.time()
                         m = RequestMetrics(
@@ -613,12 +630,14 @@ class CapacityTestExecutor(TestExecutor):
             verify_ssl=self.config.server.verify_ssl
         ) as client:
             await client.health_check()
+            poll_interval = self.config.scenario.poll_interval
             if self.config.scenario.warmup_requests > 0 and self.samples:
                 await client.warmup(
                     self.samples[0]["base64"],
                     self._ocr_params_for_sample(self.samples[0]),
                     self.config.scenario.warmup_requests,
                     concurrency=1,
+                    poll_interval=poll_interval,
                 )
             
             body_by_name = self._build_body_by_name()
@@ -649,6 +668,7 @@ class CapacityTestExecutor(TestExecutor):
                         result = await client.send_ocr_request(
                             task_info["body"],
                             task_info["request_id"],
+                            poll_interval=poll_interval,
                         )
                         end = time.time()
                         m = RequestMetrics(

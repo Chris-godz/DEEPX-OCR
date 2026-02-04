@@ -138,11 +138,66 @@ OCRHandler::OCRHandler(
     LOG_INFO("OCRHandler initialized");
 }
 
+OCRHandler::~OCRHandler() {
+    // 停止清理线程
+    if (cleanup_running_) {
+        cleanup_running_ = false;
+        if (cleanup_thread_.joinable()) {
+            cleanup_thread_.join();
+        }
+    }
+    // 停止结果收集线程
+    StopResultCollector();
+    LOG_INFO("OCRHandler destroyed");
+}
+
+void OCRHandler::CleanupExpiredTasks() {
+    while (cleanup_running_) {
+        std::this_thread::sleep_for(std::chrono::seconds(30));  // 每 30 秒清理一次
+        
+        auto now = std::chrono::steady_clock::now();
+        int cleaned = 0;
+        
+        {
+            std::lock_guard<std::mutex> lock(task_meta_mutex_);
+            for (auto it = task_meta_.begin(); it != task_meta_.end(); ) {
+                auto age = std::chrono::duration_cast<std::chrono::seconds>(
+                    now - it->second.createTime).count();
+                
+                if (age > TASK_EXPIRE_SECONDS) {
+                    int64_t task_id = it->first;
+                    it = task_meta_.erase(it);
+                    
+                    // 同时清理 result_store_
+                    {
+                        std::lock_guard<std::mutex> result_lock(result_mutex_);
+                        result_store_.erase(task_id);
+                    }
+                    cleaned++;
+                } else {
+                    ++it;
+                }
+            }
+        }
+        
+        if (cleaned > 0) {
+            LOG_INFO("[CLEANUP] Removed {} expired tasks", cleaned);
+        }
+    }
+}
+
 void OCRHandler::StartResultCollector() {
     if (collector_running_) return;
     collector_running_ = true;
     result_collector_thread_ = std::thread(&OCRHandler::ResultCollectorLoop, this);
     LOG_INFO("Result collector thread started");
+    
+    // 同时启动清理线程
+    if (!cleanup_running_) {
+        cleanup_running_ = true;
+        cleanup_thread_ = std::thread(&OCRHandler::CleanupExpiredTasks, this);
+        LOG_INFO("Task cleanup thread started");
+    }
 }
 
 void OCRHandler::StopResultCollector() {
@@ -309,71 +364,36 @@ bool OCRHandler::LoadInputImage(const OCRRequest& request, cv::Mat& image, std::
     return true;
 }
 
-int OCRHandler::HandleRequest(const OCRRequest& request, json& response_json) {
-    try {
-        // 1. 验证请求参数
-        std::string error_msg;
-        if (!request.Validate(error_msg)) {
-            LOG_WARN("Invalid request: {}", error_msg);
-            response_json = JsonResponseBuilder::BuildErrorResponse(
-                ErrorCode::INVALID_PARAMETER, error_msg);
-            return 400;
-        }
-        
-        // 2. 确保 pipeline 已初始化
-        static std::once_flag init_flag;
-        std::call_once(init_flag, [this]() {
-            if (!base_pipeline_->initialize()) {
-                LOG_ERROR("Failed to initialize base pipeline");
-                throw std::runtime_error("Failed to initialize OCR pipeline");
-            }
-            base_pipeline_->start();
-            LOG_INFO("Base pipeline initialized and started");
-            StartResultCollector();
-        });
-        
-        // 3. 根据 fileType 分流处理
-        if (request.fileType == 0) {
-            // PDF 处理路径
-            return HandlePDFRequest(request, response_json);
-        } else {
-            // 图像处理路径
-            return HandleImageRequest(request, response_json);
-        }
-        
-    } catch (const json::exception& e) {
-        LOG_ERROR("JSON parsing error: {}", e.what());
-        response_json = JsonResponseBuilder::BuildErrorResponse(
-            ErrorCode::INVALID_PARAMETER, std::string("Invalid JSON: ") + e.what());
-        return 400;
-        
-    } catch (const std::exception& e) {
-        LOG_ERROR("Exception in HandleRequest: {}", e.what());
-        response_json = JsonResponseBuilder::BuildErrorResponse(
-            ErrorCode::INTERNAL_ERROR, std::string("Internal error: ") + e.what());
-        return 500;
-    } catch (...) {
-        LOG_ERROR("Unknown exception in HandleRequest");
-        response_json = JsonResponseBuilder::BuildErrorResponse(
-            ErrorCode::INTERNAL_ERROR, "Internal error: unknown exception");
-        return 500;
-    }
-}
+// ==================== 异步接口实现 ====================
 
-int OCRHandler::HandleImageRequest(const OCRRequest& request, json& response_json) {
-    // 1. 加载输入图像
-    std::string error_msg;
+int64_t OCRHandler::SubmitImageTask(const OCRRequest& request, std::string& error_msg) {
+    // 1. 验证请求参数
+    if (!request.Validate(error_msg)) {
+        LOG_WARN("[SUBMIT] Invalid request: {}", error_msg);
+        return -1;
+    }
+    
+    // 2. 确保 pipeline 已初始化
+    static std::once_flag init_flag;
+    std::call_once(init_flag, [this]() {
+        if (!base_pipeline_->initialize()) {
+            LOG_ERROR("Failed to initialize base pipeline");
+            throw std::runtime_error("Failed to initialize OCR pipeline");
+        }
+        base_pipeline_->start();
+        LOG_INFO("Base pipeline initialized and started");
+        StartResultCollector();
+    });
+    
+    // 3. 加载图像
     cv::Mat image;
     if (!LoadInputImage(request, image, error_msg)) {
-        LOG_ERROR("Failed to load image: {}", error_msg);
-        response_json = JsonResponseBuilder::BuildErrorResponse(
-            ErrorCode::INVALID_PARAMETER, error_msg);
-        return 400;
+        LOG_ERROR("[SUBMIT] Failed to load image: {}", error_msg);
+        return -1;
     }
+    LOG_INFO("[SUBMIT] Image loaded: {}x{}", image.cols, image.rows);
     
-    LOG_INFO("Input image loaded: {}x{}", image.cols, image.rows);
-    
-    // 2. 构建 OCR 任务配置
+    // 4. 构建任务配置
     ocr::OCRTaskConfig taskConfig;
     taskConfig.useDocOrientationClassify = request.useDocOrientationClassify;
     taskConfig.useDocUnwarping = request.useDocUnwarping;
@@ -383,92 +403,89 @@ int OCRHandler::HandleImageRequest(const OCRRequest& request, json& response_jso
     taskConfig.textDetUnclipRatio = static_cast<float>(request.textDetUnclipRatio);
     taskConfig.textRecScoreThresh = static_cast<float>(request.textRecScoreThresh);
     
-    LOG_INFO("OCRTaskConfig: docOri={}, docUnwarp={}, textlineOri={}, detThresh={:.2f}, boxThresh={:.2f}, unclipRatio={:.2f}, recThresh={:.2f}",
-             taskConfig.useDocOrientationClassify, taskConfig.useDocUnwarping,
-             taskConfig.useTextlineOrientation, taskConfig.textDetThresh,
-             taskConfig.textDetBoxThresh, taskConfig.textDetUnclipRatio, taskConfig.textRecScoreThresh);
-    
-    // 3. 提交任务到 pipeline
+    // 5. 生成任务 ID 并初始化状态
     int64_t task_id = GenerateTaskId();
-    LOG_DEBUG("Pushing task_id={}", task_id);
-        
+    
+    {
+        std::lock_guard<std::mutex> lock(task_meta_mutex_);
+        TaskMeta meta;
+        meta.status = TaskStatus::PENDING;
+        meta.taskType = "image";
+        meta.createTime = std::chrono::steady_clock::now();
+        meta.request = request;
+        task_meta_[task_id] = meta;
+    }
+    
+    // 6. 提交到 Pipeline
     if (!base_pipeline_->pushTask(image, task_id, taskConfig)) {
-        LOG_ERROR("Failed to push task to pipeline");
-        response_json = JsonResponseBuilder::BuildErrorResponse(
-            ErrorCode::INTERNAL_ERROR, "Pipeline queue is full");
-        return 503;
+        // 队列满，清理状态
+        {
+            std::lock_guard<std::mutex> lock(task_meta_mutex_);
+            task_meta_.erase(task_id);
+        }
+        error_msg = "Pipeline queue is full, please retry later";
+        LOG_WARN("[SUBMIT] Pipeline queue full for task_id={}", task_id);
+        return -1;
     }
     
-    // 4. 等待结果
-    std::vector<ocr::PipelineOCRResult> results;
-    cv::Mat processed_image;
-    bool task_success = true;
-    
-    LOG_INFO("Waiting for OCR results for task_id={}...", task_id);
-    
-    if (!WaitForResult(task_id, results, processed_image, task_success, 10000)) {
-        LOG_ERROR("Failed to get OCR results for task_id={} (timeout)", task_id);
-        response_json = JsonResponseBuilder::BuildErrorResponse(
-            ErrorCode::INTERNAL_ERROR, "Failed to get OCR results or timeout");
-        return 500;
-    }
-    
-    if (!task_success) {
-        LOG_ERROR("OCR processing failed for task_id={} (engine error)", task_id);
-        response_json = JsonResponseBuilder::BuildErrorResponse(
-            ErrorCode::INTERNAL_ERROR, "OCR processing failed (detection engine error)");
-        return 500;
-    }
-    
-    LOG_INFO("OCR completed: {} text boxes detected", results.size());
-    
-    // 5. 保存可视化图像（如果启用）
-    std::string vis_url;
-    if (request.visualize && !processed_image.empty()) {
-        vis_url = SaveVisualization(processed_image, results);
-        if (!vis_url.empty()) {
-            LOG_INFO("Visualization image saved: {}", vis_url);
+    // 7. 更新状态为处理中
+    {
+        std::lock_guard<std::mutex> lock(task_meta_mutex_);
+        if (task_meta_.count(task_id)) {
+            task_meta_[task_id].status = TaskStatus::PROCESSING;
         }
     }
     
-    // 6. 构建成功响应
-    response_json = JsonResponseBuilder::BuildSuccessResponse(results, vis_url);
-    return 200;
+    LOG_INFO("[SUBMIT] Image task {} submitted successfully", task_id);
+    return task_id;
 }
 
-int OCRHandler::HandlePDFRequest(const OCRRequest& request, json& response_json) {
-    LOG_INFO("Processing PDF request: dpi={}, maxPages={}", request.pdfDpi, request.pdfMaxPages);
+int64_t OCRHandler::SubmitPDFTask(const OCRRequest& request, std::string& error_msg) {
+    // 1. 验证请求参数
+    if (!request.Validate(error_msg)) {
+        LOG_WARN("[SUBMIT] Invalid PDF request: {}", error_msg);
+        return -1;
+    }
     
-    // 1. 构建 PDF 渲染配置
+    // 2. 确保 pipeline 已初始化
+    static std::once_flag init_flag;
+    std::call_once(init_flag, [this]() {
+        if (!base_pipeline_->initialize()) {
+            LOG_ERROR("Failed to initialize base pipeline");
+            throw std::runtime_error("Failed to initialize OCR pipeline");
+        }
+        base_pipeline_->start();
+        LOG_INFO("Base pipeline initialized and started");
+        StartResultCollector();
+    });
+    
+    // 3. 渲染 PDF
     PDFRenderConfig pdfConfig;
     pdfConfig.dpi = request.pdfDpi;
     pdfConfig.maxPages = request.pdfMaxPages;
-    pdfConfig.maxDpi = 300;  // 硬限制
+    pdfConfig.maxDpi = 300;
     
-    // 2. 渲染 PDF 所有页面（内部已并行）
     PDFRenderResult renderResult;
     bool isURL = (request.file.find("http://") == 0 || request.file.find("https://") == 0);
     
     if (isURL) {
-        LOG_INFO("Rendering PDF from URL...");
         renderResult = pdf_handler_.RenderFromURL(request.file, pdfConfig);
     } else {
-        LOG_INFO("Rendering PDF from Base64...");
         renderResult = pdf_handler_.RenderFromBase64(request.file, pdfConfig);
     }
     
-    // 3. 检查 PDF 渲染错误
     if (!renderResult.success && renderResult.pages.empty()) {
-        LOG_ERROR("PDF rendering failed: {}", renderResult.errorMsg);
-        response_json = JsonResponseBuilder::BuildErrorResponse(
-            renderResult.errorCode, renderResult.errorMsg);
-        return PDFHandler::GetHttpStatusCode(renderResult.errorCode);
+        error_msg = renderResult.errorMsg;
+        LOG_ERROR("[SUBMIT] PDF rendering failed: {}", error_msg);
+        return -1;
     }
     
-    LOG_INFO("PDF rendered: {} pages (total: {})", 
-             renderResult.renderedPages, renderResult.totalPages);
+    LOG_INFO("[SUBMIT] PDF rendered: {} pages", renderResult.renderedPages);
     
-    // 4. 构建 OCR 任务配置
+    // 4. 生成主任务 ID
+    int64_t main_task_id = GenerateTaskId();
+    
+    // 5. 构建任务配置
     ocr::OCRTaskConfig taskConfig;
     taskConfig.useDocOrientationClassify = request.useDocOrientationClassify;
     taskConfig.useDocUnwarping = request.useDocUnwarping;
@@ -478,94 +495,236 @@ int OCRHandler::HandlePDFRequest(const OCRRequest& request, json& response_json)
     taskConfig.textDetUnclipRatio = static_cast<float>(request.textDetUnclipRatio);
     taskConfig.textRecScoreThresh = static_cast<float>(request.textRecScoreThresh);
     
-    // 5. 并行提交所有页面到 OCR pipeline
-    struct PageTask {
-        int64_t taskId;
-        int pageIndex;
-    };
-    std::vector<PageTask> submittedTasks;
+    // 6. 初始化主任务状态
+    std::vector<int64_t> pageTaskIds;
     
+    {
+        std::lock_guard<std::mutex> lock(task_meta_mutex_);
+        TaskMeta meta;
+        meta.status = TaskStatus::PROCESSING;
+        meta.taskType = "pdf";
+        meta.createTime = std::chrono::steady_clock::now();
+        meta.request = request;
+        meta.totalPages = renderResult.totalPages;
+        meta.renderedPages = renderResult.renderedPages;
+        task_meta_[main_task_id] = meta;
+    }
+    
+    // 7. 提交所有页面到 Pipeline
     for (const auto& page : renderResult.pages) {
         if (!page.success) {
-            LOG_WARN("Skipping failed page {}", page.pageIndex);
+            LOG_WARN("[SUBMIT] Skipping failed page {}", page.pageIndex);
+            pageTaskIds.push_back(-1);  // 标记失败页
             continue;
         }
         
-        int64_t taskId = GenerateTaskId();
+        int64_t pageTaskId = GenerateTaskId();
         
-        if (base_pipeline_->pushTask(page.image, taskId, taskConfig)) {
-            submittedTasks.push_back({taskId, page.pageIndex});
-            LOG_DEBUG("Submitted page {} as task_id={}", page.pageIndex, taskId);
+        if (base_pipeline_->pushTask(page.image, pageTaskId, taskConfig)) {
+            pageTaskIds.push_back(pageTaskId);
+            LOG_DEBUG("[SUBMIT] Page {} submitted as task_id={}", page.pageIndex, pageTaskId);
         } else {
-            LOG_ERROR("Failed to submit page {} to pipeline (queue full)", page.pageIndex);
+            LOG_ERROR("[SUBMIT] Failed to submit page {} (queue full)", page.pageIndex);
+            pageTaskIds.push_back(-1);
         }
     }
     
-    // 6. 等待所有结果
-    std::map<int, json> pageResults;      // pageIndex -> ocrResults
-    std::map<int, std::string> pageVisUrls; // pageIndex -> vis_url
+    // 8. 更新主任务的页面任务 ID 列表
+    {
+        std::lock_guard<std::mutex> lock(task_meta_mutex_);
+        if (task_meta_.count(main_task_id)) {
+            task_meta_[main_task_id].pageTaskIds = pageTaskIds;
+        }
+    }
     
-    for (const auto& task : submittedTasks) {
-        std::vector<ocr::PipelineOCRResult> ocrResults;
-        cv::Mat processedImage;
-        bool task_success = true;
+    LOG_INFO("[SUBMIT] PDF task {} submitted with {} page tasks", main_task_id, pageTaskIds.size());
+    return main_task_id;
+}
+
+bool OCRHandler::TryGetImageResult(int64_t task_id, json& response_json) {
+    // 1. 检查任务状态
+    TaskMeta meta;
+    {
+        std::lock_guard<std::mutex> lock(task_meta_mutex_);
+        auto it = task_meta_.find(task_id);
+        if (it == task_meta_.end()) {
+            response_json = JsonResponseBuilder::BuildErrorResponse(
+                ErrorCode::INVALID_PARAMETER, "Task not found");
+            return true;  // 返回 true 表示有响应（错误响应）
+        }
+        meta = it->second;
+    }
+    
+    // 2. 尝试获取结果
+    TaskResult result;
+    bool found = false;
+    {
+        std::lock_guard<std::mutex> lock(result_mutex_);
+        auto it = result_store_.find(task_id);
+        if (it != result_store_.end()) {
+            result = std::move(it->second);
+            result_store_.erase(it);
+            found = true;
+        }
+    }
+    
+    if (!found) {
+        // 结果尚未就绪
+        return false;
+    }
+    
+    // 3. 更新任务状态
+    {
+        std::lock_guard<std::mutex> lock(task_meta_mutex_);
+        if (task_meta_.count(task_id)) {
+            task_meta_[task_id].status = result.success ? TaskStatus::COMPLETED : TaskStatus::FAILED;
+        }
+    }
+    
+    // 4. 检查处理是否成功
+    if (!result.success) {
+        LOG_ERROR("[RESULT] Task {} failed (engine error)", task_id);
+        response_json = JsonResponseBuilder::BuildErrorResponse(
+            ErrorCode::INTERNAL_ERROR, "OCR processing failed (detection engine error)");
+        return true;
+    }
+    
+    LOG_INFO("[RESULT] Task {} completed: {} text boxes", task_id, result.results.size());
+    
+    // 5. 保存可视化（如果启用）
+    std::string vis_url;
+    if (meta.request.visualize && !result.processedImage.empty()) {
+        vis_url = SaveVisualization(result.processedImage, result.results);
+        if (!vis_url.empty()) {
+            LOG_INFO("[RESULT] Visualization saved: {}", vis_url);
+        }
+    }
+    
+    // 6. 构建成功响应
+    response_json = JsonResponseBuilder::BuildSuccessResponse(result.results, vis_url);
+    return true;
+}
+
+bool OCRHandler::TryGetPDFResult(int64_t task_id, json& response_json) {
+    // 1. 检查任务状态
+    TaskMeta meta;
+    {
+        std::lock_guard<std::mutex> lock(task_meta_mutex_);
+        auto it = task_meta_.find(task_id);
+        if (it == task_meta_.end()) {
+            response_json = JsonResponseBuilder::BuildErrorResponse(
+                ErrorCode::INVALID_PARAMETER, "Task not found");
+            return true;
+        }
+        meta = it->second;
+    }
+    
+    // 2. 检查所有页面是否都已完成
+    std::map<int, TaskResult> pageResults;
+    bool allCompleted = true;
+    
+    for (size_t i = 0; i < meta.pageTaskIds.size(); ++i) {
+        int64_t pageTaskId = meta.pageTaskIds[i];
         
-        if (WaitForResult(task.taskId, ocrResults, processedImage, task_success, 30000)) {
-            if (!task_success) {
-                LOG_ERROR("Page {} OCR failed (engine error, task_id={})", task.pageIndex, task.taskId);
-                pageResults[task.pageIndex] = json::array();  // 引擎失败，返回空结果
-                continue;
+        if (pageTaskId < 0) {
+            // 渲染失败的页面，创建空结果
+            TaskResult emptyResult;
+            emptyResult.success = false;
+            pageResults[static_cast<int>(i)] = emptyResult;
+            continue;
+        }
+        
+        std::lock_guard<std::mutex> lock(result_mutex_);
+        auto it = result_store_.find(pageTaskId);
+        if (it != result_store_.end()) {
+            pageResults[static_cast<int>(i)] = it->second;
+        } else {
+            allCompleted = false;
+        }
+    }
+    
+    if (!allCompleted) {
+        // 还有页面未完成
+        return false;
+    }
+    
+    // 3. 所有页面完成，构建响应
+    LOG_INFO("[RESULT] PDF task {} all pages completed", task_id);
+    
+    // 清理页面结果
+    {
+        std::lock_guard<std::mutex> lock(result_mutex_);
+        for (int64_t pageTaskId : meta.pageTaskIds) {
+            if (pageTaskId > 0) {
+                result_store_.erase(pageTaskId);
             }
+        }
+    }
+    
+    // 更新任务状态
+    {
+        std::lock_guard<std::mutex> lock(task_meta_mutex_);
+        if (task_meta_.count(task_id)) {
+            task_meta_[task_id].status = TaskStatus::COMPLETED;
+        }
+    }
+    
+    // 构建页面结果 JSON
+    json pagesArray = json::array();
+    std::map<int, std::string> pageVisUrls;
+    
+    for (int i = 0; i < meta.renderedPages; ++i) {
+        json pageJson;
+        pageJson["pageIndex"] = i;
+        
+        if (pageResults.count(i) && pageResults[i].success) {
+            const auto& result = pageResults[i];
             
-            // 构建该页的 OCR 结果 JSON
             json ocrResultsJson = json::array();
-            for (const auto& r : ocrResults) {
+            for (const auto& r : result.results) {
                 ocrResultsJson.push_back(JsonResponseBuilder::ConvertOCRResultToJson(r));
             }
-            pageResults[task.pageIndex] = ocrResultsJson;
+            pageJson["ocrResults"] = ocrResultsJson;
             
-            LOG_INFO("Page {} OCR completed: {} text boxes", task.pageIndex, ocrResults.size());
-            
-            // 可视化（如果启用）
-            if (request.visualize && !processedImage.empty()) {
-                std::string visUrl = SaveVisualization(processedImage, ocrResults, task.pageIndex);
+            // 可视化
+            if (meta.request.visualize && !result.processedImage.empty()) {
+                std::string visUrl = SaveVisualization(result.processedImage, result.results, i);
                 if (!visUrl.empty()) {
-                    pageVisUrls[task.pageIndex] = visUrl;
+                    pageJson["ocrImage"] = visUrl;
                 }
             }
         } else {
-            LOG_ERROR("Timeout waiting for page {} (task_id={})", task.pageIndex, task.taskId);
-            pageResults[task.pageIndex] = json::array();  // 超时，返回空结果
-        }
-    }
-    
-    // 7. 按页码顺序组装响应
-    json pagesArray = json::array();
-    for (int i = 0; i < renderResult.renderedPages; ++i) {
-        json pageJson;
-        pageJson["pageIndex"] = i;
-        pageJson["ocrResults"] = pageResults.count(i) ? pageResults[i] : json::array();
-        
-        if (pageVisUrls.count(i)) {
-            pageJson["ocrImage"] = pageVisUrls[i];
-        }
-        
-        // 如果该页渲染失败，添加错误信息
-        if (i < static_cast<int>(renderResult.pages.size()) && !renderResult.pages[i].success) {
-            pageJson["error"] = renderResult.pages[i].errorMsg;
+            pageJson["ocrResults"] = json::array();
+            if (pageResults.count(i)) {
+                pageJson["error"] = "Page processing failed";
+            }
         }
         
         pagesArray.push_back(pageJson);
     }
     
-    // 8. 构建最终响应
     response_json = JsonResponseBuilder::BuildPDFSuccessResponse(
-        pagesArray, 
-        renderResult.totalPages, 
-        renderResult.renderedPages);
+        pagesArray, meta.totalPages, meta.renderedPages);
     
-    LOG_INFO("PDF OCR completed: {} pages processed", renderResult.renderedPages);
-    return 200;
+    return true;
+}
+
+OCRHandler::TaskStatus OCRHandler::GetTaskStatus(int64_t task_id) {
+    std::lock_guard<std::mutex> lock(task_meta_mutex_);
+    auto it = task_meta_.find(task_id);
+    if (it == task_meta_.end()) {
+        return TaskStatus::NOT_FOUND;
+    }
+    return it->second.status;
+}
+
+std::string OCRHandler::GetTaskType(int64_t task_id) {
+    std::lock_guard<std::mutex> lock(task_meta_mutex_);
+    auto it = task_meta_.find(task_id);
+    if (it == task_meta_.end()) {
+        return "";
+    }
+    return it->second.taskType;
 }
 
 } // namespace ocr_server

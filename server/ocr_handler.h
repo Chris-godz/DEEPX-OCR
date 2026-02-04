@@ -13,6 +13,8 @@
 #include <condition_variable>
 #include <thread>
 #include <atomic>
+#include <optional>
+#include <chrono>
 
 using json = nlohmann::json;
 
@@ -56,9 +58,24 @@ struct OCRRequest {
 
 /**
  * @brief OCR请求处理器
+ * 
+ * 采用异步模式架构：
+ * - POST /ocr/submit: 提交任务立即返回 task_id
+ * - GET /ocr/result/{id}: 轮询获取结果
  */
 class OCRHandler {
 public:
+    /**
+     * @brief 任务状态枚举
+     */
+    enum class TaskStatus {
+        PENDING,      // 已接收，等待进入 Pipeline
+        PROCESSING,   // 正在处理
+        COMPLETED,    // 处理完成
+        FAILED,       // 处理失败
+        NOT_FOUND     // 任务不存在
+    };
+
     /**
      * @brief 构造函数
      * @param pipeline_config OCR Pipeline配置
@@ -72,12 +89,57 @@ public:
     );
     
     /**
-     * @brief 处理OCR请求
-     * @param request OCR请求参数
-     * @param response_json 输出的JSON响应
-     * @return HTTP状态码
+     * @brief 析构函数
      */
-    int HandleRequest(const OCRRequest& request, json& response_json);
+    ~OCRHandler();
+    
+    // ==================== 异步模式接口 ====================
+    
+    /**
+     * @brief 异步提交图像 OCR 任务（非阻塞）
+     * @param request OCR请求参数
+     * @param error_msg 错误信息（如果失败）
+     * @return task_id (>0) 成功，-1 失败
+     */
+    int64_t SubmitImageTask(const OCRRequest& request, std::string& error_msg);
+    
+    /**
+     * @brief 异步提交 PDF OCR 任务（非阻塞）
+     * @param request OCR请求参数  
+     * @param error_msg 错误信息（如果失败）
+     * @return task_id (>0) 成功，-1 失败
+     */
+    int64_t SubmitPDFTask(const OCRRequest& request, std::string& error_msg);
+    
+    /**
+     * @brief 非阻塞查询图像任务结果
+     * @param task_id 任务 ID
+     * @param response_json 输出的 JSON 响应
+     * @return true 结果已就绪，false 仍在处理中
+     */
+    bool TryGetImageResult(int64_t task_id, json& response_json);
+    
+    /**
+     * @brief 非阻塞查询 PDF 任务结果
+     * @param task_id 任务 ID
+     * @param response_json 输出的 JSON 响应
+     * @return true 结果已就绪，false 仍在处理中
+     */
+    bool TryGetPDFResult(int64_t task_id, json& response_json);
+    
+    /**
+     * @brief 查询任务状态
+     * @param task_id 任务 ID
+     * @return 任务状态
+     */
+    TaskStatus GetTaskStatus(int64_t task_id);
+    
+    /**
+     * @brief 查询任务类型
+     * @param task_id 任务 ID
+     * @return "image", "pdf", 或 "" (未找到)
+     */
+    std::string GetTaskType(int64_t task_id);
     
 private:
     /**
@@ -95,7 +157,7 @@ private:
     std::string vis_output_dir_;                       // 可视化输出目录
     std::string vis_url_prefix_;                       // 可视化URL前缀
     
-    // 并发结果存储（解决多请求结果错位问题）
+    // ==================== 结果存储（同步 + 异步共用） ====================
     struct TaskResult {
         std::vector<ocr::PipelineOCRResult> results;
         cv::Mat processedImage;
@@ -107,6 +169,26 @@ private:
     std::thread result_collector_thread_;               // 后台结果收集线程
     std::atomic<bool> collector_running_{false};        // 收集线程运行标志
     
+    // ==================== 异步任务状态管理 ====================
+    struct TaskMeta {
+        TaskStatus status = TaskStatus::PENDING;
+        std::string taskType;  // "image" or "pdf"
+        std::chrono::steady_clock::time_point createTime;
+        OCRRequest request;    // 保存原始请求（用于可视化等）
+        // PDF 任务特有
+        int totalPages = 0;
+        int renderedPages = 0;
+        std::vector<int64_t> pageTaskIds;  // 各页的子任务 ID
+    };
+    std::map<int64_t, TaskMeta> task_meta_;            // task_id -> 任务元信息
+    std::mutex task_meta_mutex_;                        // 保护 task_meta_
+    
+    // 定期清理过期任务（防止内存泄漏）
+    std::thread cleanup_thread_;
+    std::atomic<bool> cleanup_running_{false};
+    void CleanupExpiredTasks();
+    static constexpr int TASK_EXPIRE_SECONDS = 300;    // 任务过期时间：5 分钟
+    
     void StartResultCollector();                        // 启动结果收集线程
     void StopResultCollector();                         // 停止结果收集线程
     void ResultCollectorLoop();                         // 结果收集循环
@@ -116,16 +198,6 @@ private:
     // ==================== PDF 处理相关 ====================
     
     PDFHandler pdf_handler_;                            // PDF 处理器
-    
-    /**
-     * @brief 处理 PDF OCR 请求（并行提交到 pipeline）
-     */
-    int HandlePDFRequest(const OCRRequest& request, json& response_json);
-    
-    /**
-     * @brief 处理图像 OCR 请求（原 HandleRequest 逻辑）
-     */
-    int HandleImageRequest(const OCRRequest& request, json& response_json);
     
     /**
      * @brief 生成唯一任务 ID

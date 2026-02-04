@@ -1,0 +1,19 @@
+# DeepX OCR Server 配置文件
+# ============================================
+
+# 服务配置
+server:
+  # 服务端口
+  port: 8080
+  # HTTP 线程数
+  threads: 32
+
+# 模型配置
+model:
+  # 模型类型: server 或 mobile
+  type: mobile
+
+# 目录配置
+directories:
+  # 可视化输出目录 (相对于项目根目录)
+  vis_dir: output/vis

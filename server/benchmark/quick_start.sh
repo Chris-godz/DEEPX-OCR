@@ -62,7 +62,7 @@ case $choice in
         echo -e "\n${CYAN}Running Latency Test...${NC}"
         python3 benchmark.py \
             --mode latency \
-            --images "$PROJECT_ROOT/images" \
+            --images "$PROJECT_ROOT/test/twocode_images" \
             --runs 20 \
             --warmup 10 \
             --formats markdown html json
@@ -71,8 +71,8 @@ case $choice in
         echo -e "\n${CYAN}Running Throughput Test...${NC}"
         python3 benchmark.py \
             --mode throughput \
-            --images "$PROJECT_ROOT/images" \
-            --concurrency 10 \
+            --images "$PROJECT_ROOT/test/twocode_images" \
+            --concurrency 20 \
             --runs 20 \
             --warmup 10 \
             --formats markdown html json
@@ -81,7 +81,7 @@ case $choice in
         echo -e "\n${CYAN}Running Stress Test...${NC}"
         python3 benchmark.py \
             --mode stress \
-            --images "$PROJECT_ROOT/images" \
+            --images "$PROJECT_ROOT/test/twocode_images" \
             --runs 5 \
             --warmup 10 \
             --formats markdown html json
@@ -90,8 +90,8 @@ case $choice in
         echo -e "\n${CYAN}Running Stability Test...${NC}"
         python3 benchmark.py \
             --mode stability \
-            --images "$PROJECT_ROOT/images" \
-            --concurrency 10 \
+            --images "$PROJECT_ROOT/test/twocode_images" \
+            --concurrency 20 \
             --warmup 10 \
             --formats markdown html json
         ;;
@@ -99,9 +99,11 @@ case $choice in
         echo -e "\n${CYAN}Running Capacity Test...${NC}"
         python3 benchmark.py \
             --mode capacity \
-            --images "$PROJECT_ROOT/images" \
-            --runs 5 \
+            --images "$PROJECT_ROOT/test/twocode_images" \
+            --runs 20 \
             --warmup 10 \
+            --max-concurrency 30 \
+            --concurrency-step 2 \
             --formats markdown html json
         ;;
     6)

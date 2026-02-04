@@ -71,6 +71,7 @@ class TestScenario:
     ramp_up_seconds: int = 0           # 压力测试的爬坡时间
     max_concurrency: int = 100         # 容量规划的最大并发数
     concurrency_step: int = 5          # 容量规划的并发步长
+    poll_interval: float = 0.005       # 轮询间隔（秒）
     
     def to_dict(self) -> dict:
         d = asdict(self)

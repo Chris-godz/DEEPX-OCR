@@ -102,10 +102,34 @@ ocr::OCRPipelineConfig LoadPipelineConfig(bool useMobileModel) {
     config.enableVisualization = true;
     config.sortResults = true;
     
+    // 根据模型类型设置模型路径
     if (useMobileModel) {
-        LOG_INFO("Using MOBILE models");
+        std::string modelRoot = std::string(PROJECT_ROOT_DIR) + "/engine/model_files/mobile";
+        
+        // 检测模型路径
+        config.detectorConfig.model640Path = modelRoot + "/det_mobile_640.dxnn";
+        config.detectorConfig.model960Path = modelRoot + "/det_mobile_960.dxnn";
+        
+        // 识别模型路径
+        config.recognizerConfig.modelPaths = {
+            {3, modelRoot + "/rec_mobile_ratio_3.dxnn"},
+            {5, modelRoot + "/rec_mobile_ratio_5.dxnn"},
+            {10, modelRoot + "/rec_mobile_ratio_10.dxnn"},
+            {15, modelRoot + "/rec_mobile_ratio_15.dxnn"},
+            {25, modelRoot + "/rec_mobile_ratio_25.dxnn"},
+            {35, modelRoot + "/rec_mobile_ratio_35.dxnn"}
+        };
+        
+        // 分类模型路径 (文本行方向)
+        config.classifierConfig.modelPath = modelRoot + "/textline_ori.dxnn";
+        
+        // 文档预处理模型路径
+        config.docPreprocessingConfig.orientationConfig.modelPath = modelRoot + "/doc_ori_fixed.dxnn";
+        config.docPreprocessingConfig.uvdocConfig.modelPath = modelRoot + "/UVDoc_pruned_p3.dxnn";
+        
+        LOG_INFO("Using MOBILE models from: {}", modelRoot);
     } else {
-        LOG_INFO("Using SERVER models");
+        LOG_INFO("Using SERVER models (default paths)");
     }
     
     return config;
@@ -257,33 +281,52 @@ int main(int argc, char* argv[]) {
         return res;
     });
     
-    // OCR识别接口
-    CROW_ROUTE(app, "/ocr").methods(crow::HTTPMethod::POST)
+    // ==================== 异步提交接口 ====================
+    CROW_ROUTE(app, "/ocr/submit").methods(crow::HTTPMethod::POST)
     ([ocr_handler](const crow::request& req) {
-        LOG_INFO("Received OCR request from {}", req.remote_ip_address);
+        LOG_INFO("Received async submit request from {}", req.remote_ip_address);
         
         try {
-            // 解析JSON请求
             json request_json = json::parse(req.body);
-            
-            // 转换为OCRRequest对象
             auto ocr_request = OCRRequest::FromJson(request_json);
             
-            // 处理请求
-            json response_json;
-            int status_code = ocr_handler->HandleRequest(ocr_request, response_json);
+            std::string error_msg;
+            int64_t task_id = -1;
             
-            // 返回响应
-            crow::response res(status_code, response_json.dump());
+            // 根据 fileType 选择提交方式
+            if (ocr_request.fileType == 0) {
+                // PDF
+                task_id = ocr_handler->SubmitPDFTask(ocr_request, error_msg);
+            } else {
+                // 图像
+                task_id = ocr_handler->SubmitImageTask(ocr_request, error_msg);
+            }
+            
+            if (task_id < 0) {
+                json error_response = JsonResponseBuilder::BuildErrorResponse(
+                    ErrorCode::INVALID_PARAMETER, error_msg);
+                crow::response res(400, error_response.dump());
+                res.set_header("Content-Type", "application/json");
+                return res;
+            }
+            
+            // 返回 task_id
+            json response;
+            response["errorCode"] = 0;
+            response["errorMsg"] = "Task submitted successfully";
+            response["taskId"] = task_id;
+            response["status"] = "processing";
+            response["taskType"] = (ocr_request.fileType == 0) ? "pdf" : "image";
+            
+            crow::response res(202, response.dump());  // 202 Accepted
             res.set_header("Content-Type", "application/json");
             return res;
             
         } catch (const json::exception& e) {
             LOG_ERROR("JSON parse error: {}", e.what());
             json error_response = JsonResponseBuilder::BuildErrorResponse(
-                ErrorCode::INVALID_PARAMETER, 
+                ErrorCode::INVALID_PARAMETER,
                 std::string("Invalid JSON format: ") + e.what());
-            
             crow::response res(400, error_response.dump());
             res.set_header("Content-Type", "application/json");
             return res;
@@ -293,17 +336,62 @@ int main(int argc, char* argv[]) {
             json error_response = JsonResponseBuilder::BuildErrorResponse(
                 ErrorCode::INTERNAL_ERROR,
                 std::string("Internal server error: ") + e.what());
-            
             crow::response res(500, error_response.dump());
             res.set_header("Content-Type", "application/json");
             return res;
-        } catch (...) {
-            LOG_ERROR("Unknown exception occurred");
-            json error_response = JsonResponseBuilder::BuildErrorResponse(
-                ErrorCode::INTERNAL_ERROR,
-                "Internal server error: unknown exception");
+        }
+    });
+    
+    // ==================== 异步结果查询接口 ====================
+    CROW_ROUTE(app, "/ocr/result/<int>")
+    ([ocr_handler](int64_t task_id) {
+        LOG_DEBUG("Received result query for task_id={}", task_id);
+        
+        // 1. 检查任务是否存在
+        auto status = ocr_handler->GetTaskStatus(task_id);
+        
+        if (status == OCRHandler::TaskStatus::NOT_FOUND) {
+            json response;
+            response["errorCode"] = 404;
+            response["errorMsg"] = "Task not found";
+            response["taskId"] = task_id;
             
-            crow::response res(500, error_response.dump());
+            crow::response res(404, response.dump());
+            res.set_header("Content-Type", "application/json");
+            return res;
+        }
+        
+        // 2. 获取任务类型
+        std::string taskType = ocr_handler->GetTaskType(task_id);
+        
+        // 3. 尝试获取结果
+        json response_json;
+        bool resultReady = false;
+        
+        if (taskType == "pdf") {
+            resultReady = ocr_handler->TryGetPDFResult(task_id, response_json);
+        } else {
+            resultReady = ocr_handler->TryGetImageResult(task_id, response_json);
+        }
+        
+        if (resultReady) {
+            // 结果已就绪
+            response_json["taskId"] = task_id;
+            response_json["status"] = "completed";
+            
+            crow::response res(200, response_json.dump());
+            res.set_header("Content-Type", "application/json");
+            return res;
+        } else {
+            // 结果尚未就绪
+            json response;
+            response["errorCode"] = 0;
+            response["errorMsg"] = "Task is still processing";
+            response["taskId"] = task_id;
+            response["status"] = "processing";
+            response["taskType"] = taskType;
+            
+            crow::response res(202, response.dump());  // 202 表示仍在处理
             res.set_header("Content-Type", "application/json");
             return res;
         }
@@ -327,9 +415,10 @@ int main(int argc, char* argv[]) {
     // 启动服务器
     LOG_INFO("Starting server on port {} with {} threads...", port, threads);
     LOG_INFO("Endpoints:");
-    LOG_INFO("  - POST   /ocr           (OCR Recognition)");
-    LOG_INFO("  - GET    /health        (Health Check)");
-    LOG_INFO("  - GET    /static/vis/*  (Visualization Images)");
+    LOG_INFO("  - POST   /ocr/submit       (Async Submit - non-blocking)");
+    LOG_INFO("  - GET    /ocr/result/<id>  (Async Result Query)");
+    LOG_INFO("  - GET    /health           (Health Check)");
+    LOG_INFO("  - GET    /static/vis/*     (Visualization Images)");
     LOG_INFO("===============================================");
     
     app.port(port)
