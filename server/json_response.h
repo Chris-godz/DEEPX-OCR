@@ -23,11 +23,13 @@ public:
      * @brief 构建成功的OCR响应
      * @param results OCR识别结果列表
      * @param vis_image_url 可视化图片URL（可选）
+     * @param processing_time_ms 处理时间（毫秒，可选，-1表示不包含）
      * @return JSON响应对象
      */
     static json BuildSuccessResponse(
         const std::vector<ocr::PipelineOCRResult>& results,
-        const std::string& vis_image_url = ""
+        const std::string& vis_image_url = "",
+        int64_t processing_time_ms = -1
     );
     
     /**
@@ -54,12 +56,14 @@ public:
      * @param pages_results 每页的 OCR 结果数组
      * @param totalPages PDF 总页数
      * @param renderedPages 实际渲染的页数
+     * @param processing_time_ms 处理时间（毫秒，可选，-1表示不包含）
      * @return JSON 响应对象
      */
     static json BuildPDFSuccessResponse(
         const json& pages_results,
         int totalPages,
-        int renderedPages
+        int renderedPages,
+        int64_t processing_time_ms = -1
     );
 };
 

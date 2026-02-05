@@ -1,5 +1,23 @@
+"""
+DeepX OCR Server WebUI
+======================
+
+A production-grade Gradio WebUI for the DeepX OCR Server.
+
+This module provides:
+- Async OCR task submission and polling
+- Support for PDF and image file processing  
+- Configurable OCR parameters
+- Result visualization and export
+
+Author: DeepX Team
+"""
+
+from __future__ import annotations
+
 import atexit
 import base64
+import functools
 import io
 import json
 import logging
@@ -9,39 +27,168 @@ import threading
 import time
 import uuid
 import zipfile
+from dataclasses import dataclass, field
+from enum import IntEnum
 from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar, Union
 
 import gradio as gr
 import requests
 from PIL import Image
 
-# ============ 日志配置 ============
+# ============================================================================
+# Type Definitions
+# ============================================================================
+
+T = TypeVar('T')
+ImageBytes = bytes
+FilePath = Union[str, Path]
+
+
+class FileType(IntEnum):
+    """File type enumeration for OCR processing."""
+    PDF = 0
+    IMAGE = 1
+
+
+# ============================================================================
+# Configuration
+# ============================================================================
+
+@dataclass(frozen=True)
+class APIConfig:
+    """API configuration settings."""
+    base_url: str = field(default_factory=lambda: os.environ.get("API_BASE", "http://localhost:8080"))
+    token: str = field(default_factory=lambda: os.environ.get("API_TOKEN", "deepx_token"))
+    poll_interval: float = 0.5  # seconds
+    poll_timeout: float = 300.0  # seconds
+    request_timeout: float = 30.0  # seconds
+    
+    @property
+    def submit_url(self) -> str:
+        return os.environ.get("API_SUBMIT_URL", f"{self.base_url}/ocr/submit")
+    
+    @property
+    def result_url(self) -> str:
+        return os.environ.get("API_RESULT_URL", f"{self.base_url}/ocr/result")
+    
+    @property
+    def headers(self) -> Dict[str, str]:
+        return {
+            "Authorization": f"token {self.token}",
+            "Content-Type": "application/json",
+        }
+
+
+@dataclass(frozen=True)
+class AppConfig:
+    """Application configuration settings."""
+    title: str = "DeepX OCR Server Demo"
+    tmp_delete_time: int = 900  # seconds
+    thread_wakeup_time: int = 600  # seconds
+    server_host: str = "0.0.0.0"
+    server_port: int = 7860
+
+
+@dataclass
+class OCRSettings:
+    """OCR processing settings from UI inputs."""
+    use_doc_orientation_classify: bool = False
+    use_doc_unwarping: bool = False
+    use_textline_orientation: bool = False
+    text_det_thresh: float = 0.30
+    text_det_box_thresh: float = 0.60
+    text_det_unclip_ratio: float = 1.5
+    text_rec_score_thresh: float = 0.00
+    pdf_dpi: int = 150
+    pdf_max_pages: int = 10
+    
+    def to_api_params(self, file_type: FileType) -> Dict[str, Any]:
+        """Convert settings to API request parameters."""
+        params = {
+            "useDocOrientationClassify": self.use_doc_orientation_classify,
+            "useDocUnwarping": self.use_doc_unwarping,
+            "useTextlineOrientation": self.use_textline_orientation,
+            "textDetThresh": self.text_det_thresh,
+            "textDetBoxThresh": self.text_det_box_thresh,
+            "textDetUnclipRatio": self.text_det_unclip_ratio,
+            "textRecScoreThresh": self.text_rec_score_thresh,
+        }
+        if file_type == FileType.PDF:
+            params["pdfDpi"] = int(self.pdf_dpi)
+            params["pdfMaxPages"] = int(self.pdf_max_pages)
+        return params
+
+
+@dataclass
+class OCRResult:
+    """OCR processing result container."""
+    original_file: str
+    file_type: str
+    ocr_images: List[ImageBytes]
+    output_json: Dict[str, Any]
+    input_images: List[ImageBytes]
+    api_response: Dict[str, Any]
+    processing_time_ms: int = 0  # 服务器处理时间（毫秒）
+    
+    @property
+    def has_results(self) -> bool:
+        return len(self.ocr_images) > 0
+
+
+# Initialize configurations
+API_CONFIG = APIConfig()
+APP_CONFIG = AppConfig()
+
+# ============================================================================
+# Logging Setup
+# ============================================================================
+
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 logger = logging.getLogger(__name__)
 
-# Get absolute path for static files
+
+def log_function_call(func: Callable[..., T]) -> Callable[..., T]:
+    """Decorator to log function entry and exit."""
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs) -> T:
+        func_name = func.__name__
+        logger.debug(f"[{func_name}] Called with args={args[:2]}..., kwargs keys={list(kwargs.keys())}")
+        try:
+            result = func(*args, **kwargs)
+            logger.debug(f"[{func_name}] Completed successfully")
+            return result
+        except Exception as e:
+            logger.error(f"[{func_name}] Failed with error: {e}")
+            raise
+    return wrapper
+
+
+# ============================================================================
+# Path Configuration  
+# ============================================================================
+
 BASE_DIR = Path(__file__).parent.resolve()
+EXAMPLE_DIR = BASE_DIR / "examples"
+EXAMPLE_PDF_DIR = BASE_DIR / "examples_pdf"
+BANNER_PATH = str(BASE_DIR / "res" / "img" / "deepx-baidu-pp-banner.png")
+BANNER_CES_PATH = str(BASE_DIR / "res" / "img" / "DEEPX-Banner-CES-2026-01.png")
 
-# ============ API 配置 (修改为 DeepX OCR Server) ============
-API_BASE = os.environ.get("API_BASE", "http://localhost:8080")
-API_SUBMIT_URL = os.environ.get("API_SUBMIT_URL", f"{API_BASE}/ocr/submit")
-API_RESULT_URL = os.environ.get("API_RESULT_URL", f"{API_BASE}/ocr/result")
-TOKEN = os.environ.get("API_TOKEN", "deepx_token")
+# Application title alias (for backward compatibility)
+TITLE = APP_CONFIG.title
 
-# 异步轮询配置
-POLL_INTERVAL = 0.5  # 轮询间隔（秒）
-POLL_TIMEOUT = 300   # 轮询超时（秒）
-
-TITLE = "DeepX OCR Server Demo"
-
+# Temporary directory with cleanup on exit
 TEMP_DIR = tempfile.TemporaryDirectory()
 atexit.register(TEMP_DIR.cleanup)
 
-# ============ 主题配置 (与原项目完全一致) ============
+# ============================================================================
+# Theme Configuration
+# ============================================================================
+
 paddle_theme = gr.themes.Soft(
     font=(gr.themes.GoogleFont("Roboto"), "Open Sans", "Arial", "sans-serif"),
     font_mono=(gr.themes.GoogleFont("Fira Code"), "monospace"),
@@ -51,7 +198,7 @@ paddle_theme = gr.themes.Soft(
         c200="#a1a7f2",
         c300="#7d85ed",
         c400="#5963e8",
-        c500="#2932e1",  # 主色调
+        c500="#2932e1",
         c600="#242bb4",
         c700="#1e2487",
         c800="#181d5a",
@@ -59,10 +206,6 @@ paddle_theme = gr.themes.Soft(
         c950="#0c0f1d",
     ),
 )
-
-MAX_NUM_PAGES = 100
-TMP_DELETE_TIME = 900
-THREAD_WAKEUP_TIME = 600
 
 # ============ CSS 样式 (与原项目完全一致) ============
 CSS = """
@@ -132,6 +275,7 @@ p, span, div, li, td, th {
     width: 100% !important;
     margin: 0 !important;
     padding: 0 !important;
+    min-height: 100vh !important;
 }
 
 /* Force main containers to use full width */
@@ -565,20 +709,6 @@ button:hover,
     --button-primary-background-fill-hover: var(--primary-hover);
 }
 
-/* ===== 全局强制浅色背景 ===== */
-/* 所有按钮悬停状态 */
-.gr-button:hover,
-.secondary:hover,
-button.secondary:hover,
-[data-testid="button"]:hover,
-.gr-box:hover,
-.gr-input:hover,
-.gr-check-radio:hover,
-.svelte-1p9xokt:hover {
-    background: var(--primary-light) !important;
-    background-color: var(--primary-light) !important;
-}
-
 /* 强制所有输入框和区域使用白色背景 */
 input, textarea, select,
 .gr-box, .gr-input, .gr-form,
@@ -810,13 +940,12 @@ button[role="tab"]:hover:not([aria-selected="true"]),
     transform: none !important;
 }
 
-/* OCR Result Gallery - Vertical scrollable list with dynamic height */
+/* OCR Result Gallery - Vertical scrollable list, fills available space */
 .ocr-result-gallery-vertical {
     width: 100% !important;
     max-width: 100% !important;
-    height: auto !important;
-    min-height: unset !important;
-    max-height: 600px !important;  /* Will be overridden by JS */
+    flex-grow: 1 !important;
+    min-height: 0 !important;
     overflow-y: auto !important;
     overflow-x: hidden !important;
     padding: 12px !important;
@@ -827,14 +956,14 @@ button[role="tab"]:hover:not([aria-selected="true"]),
     scrollbar-color: var(--primary-color) var(--bg-hover) !important;
     display: flex !important;
     flex-direction: column !important;
-    align-items: center !important;  /* Center images horizontally */
+    align-items: center !important;
 }
 
-/* Force Gallery wrapper to fit content */
+/* Force Gallery wrapper to fill height */
 .ocr-result-gallery-vertical > .wrap,
 .ocr-result-gallery-vertical > div {
-    height: auto !important;
-    min-height: unset !important;
+    flex-grow: 1 !important;
+    min-height: 0 !important;
 }
 
 .ocr-result-gallery-vertical::-webkit-scrollbar {
@@ -901,9 +1030,10 @@ button[role="tab"]:hover:not([aria-selected="true"]),
     margin: 0 auto !important;
 }
 
-/* JSON Output Scrollable Container - dynamic height */
+/* JSON Output Scrollable Container - fill available space in tab */
 #json-output-scrollable {
-    max-height: 600px !important;  /* Will be overridden by JS */
+    flex-grow: 1 !important;
+    min-height: 0 !important;
     overflow-y: auto !important;
     overflow-x: hidden !important;
     scrollbar-width: thin !important;
@@ -933,46 +1063,61 @@ button[role="tab"]:hover:not([aria-selected="true"]),
     background: var(--primary-hover) !important;
 }
 
-/* Results Content Wrapper - contains Tabs and Download button */
+/* Results Content Wrapper - contains Tabs and Download button.
+   DO NOT use 'display: !important' here - Gradio uses display to control visible=True/False. */
 #results-content-wrapper {
+    flex-direction: column !important;
+    flex-grow: 1 !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+}
+
+/* Results Tabs - fill available space */
+#results-tabs {
     display: flex !important;
     flex-direction: column !important;
-    height: auto !important;
+    flex-grow: 1 !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
 }
 
-/* Results content - OCR and JSON displayed together vertically */
-#results-content-wrapper > .block,
-#results-content-wrapper > div:not(.download-btn-container) {
-    margin-bottom: 12px !important;
+/* Tab content area (tabitem) - scrollable content area */
+#results-tabs > .tabitem,
+#results-tabs > div[role="tabpanel"] {
+    flex-direction: column !important;
+    flex-grow: 1 !important;
+    min-height: 0 !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
 }
 
-/* Download button container - fixed at Results bottom with minimal top margin */
+/* Download button container - fixed at absolute bottom */
 .download-btn-container {
-    margin-top: 4px !important;
-    margin-bottom: 0 !important;
-    padding: 0 !important;
+    margin-top: auto !important;
+    padding-top: 12px !important;
     gap: 12px !important;
     flex-shrink: 0 !important;
+    border-top: 1px solid var(--border-color) !important;
 }
 
 .download-btn-container .download-file {
     margin: 0 !important;
 }
 
-/* OCR gallery - small bottom margin to Tab Content boundary */
+/* OCR gallery - fill available space and scroll */
 #ocr-gallery-scrollable {
     margin: 0 !important;
-    margin-bottom: 1px !important;
-    height: auto !important;
-    min-height: unset !important;
+    flex-grow: 1 !important;
+    min-height: 0 !important;
+    overflow-y: auto !important;
 }
 
-/* OCR gallery wrapper - fit content height */
+/* OCR gallery wrapper - fill height */
 #ocr-gallery-scrollable > div,
 #ocr-gallery-scrollable .wrap,
 #ocr-gallery-scrollable .svelte-1p9xokt {
-    height: auto !important;
-    min-height: unset !important;
+    height: 100% !important;
+    min-height: 0 !important;
 }
 
 /* OCR Gallery - remove all internal spacing and fixed heights */
@@ -1009,6 +1154,17 @@ button[role="tab"]:hover:not([aria-selected="true"]),
     margin: 0 !important;
     padding: 0 !important;
     margin-bottom: 1px !important;
+}
+
+/* Processing time display container */
+.processing-time-container {
+    margin: 0 0 8px 0 !important;
+    padding: 0 !important;
+}
+
+#processing-time-display {
+    border: none !important;
+    background: transparent !important;
 }
 
 /* ===== 初始状态隐藏控件 ===== */
@@ -1129,7 +1285,7 @@ button[role="tab"]:hover:not([aria-selected="true"]),
     display: grid !important;
     grid-template-columns: 360px 1fr !important;
     column-gap: 16px !important;
-    align-items: stretch !important;  /* Keep both columns same height */
+    align-items: stretch !important;  /* Both columns same height */
     width: 100% !important;
     margin: 0 !important;
 }
@@ -1142,38 +1298,22 @@ button[role="tab"]:hover:not([aria-selected="true"]),
     width: 360px !important;
     max-width: 360px !important;
     grid-column: 1 !important;
-    position: sticky !important;
-    top: 0 !important;
-    align-self: stretch !important;
-    overflow: visible !important;
 }
 
 #results-column {
     min-width: 0 !important;
     grid-column: 2 !important;
-    align-self: stretch !important;  /* Match sidebar height */
-}
-
-/* Results column white container - fill height and match sidebar */
-#results-column > .white-container {
-    display: flex !important;
-    flex-direction: column !important;
-    height: 100% !important;
-    min-height: inherit !important;
-}
-
-/* Results content wrapper - compact content at top, but can expand */
-#results-content-wrapper {
-    flex-shrink: 0 !important;
-    flex-grow: 1 !important;  /* Allow expanding to fill remaining space */
     display: flex !important;
     flex-direction: column !important;
 }
 
-/* Results content - vertical layout */
-#results-content-wrapper {
+/* Results column white container - fill height */
+#results-column .white-container {
     display: flex !important;
     flex-direction: column !important;
+    flex-grow: 1 !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
 }
 
 /* ===== Responsive ===== */
@@ -1189,8 +1329,6 @@ button[role="tab"]:hover:not([aria-selected="true"]),
         width: 100% !important;
         max-width: 100% !important;
         min-width: 0 !important;
-        position: static !important;
-        min-height: auto !important;
     }
 }
 
@@ -1213,6 +1351,8 @@ button[role="tab"]:hover:not([aria-selected="true"]),
     border: none !important;
     box-shadow: none !important;
     border-radius: 0 !important;
+    flex-shrink: 0 !important;
+    flex-grow: 0 !important;
 }
 
 .banner-container .image-container {
@@ -1260,16 +1400,6 @@ button[role="tab"],
 .tabitem button,
 div[class*="tab"] button {
     color: var(--title-color) !important;
-}
-
-button[role="tab"][aria-selected="true"] {
-    background: var(--primary-color) !important;
-    color: #ffffff !important;
-}
-
-button[role="tab"]:hover:not([aria-selected="true"]) {
-    background: var(--primary-light) !important;
-    color: var(--primary-color) !important;
 }
 
 /* Force Number input labels to be visible */
@@ -1355,28 +1485,11 @@ textarea::placeholder {
 }
 """
 
-EXAMPLE_DIR = BASE_DIR / "examples"
-EXAMPLE_PDF_DIR = BASE_DIR / "examples_pdf"
+# ============================================================================
+# Tooltip Descriptions
+# ============================================================================
 
-
-# Dynamically load example files from directories
-def load_examples_from_dir(directory, extensions):
-    """Load all files with specified extensions from directory"""
-    examples = []
-    if directory.exists() and directory.is_dir():
-        for file_path in sorted(directory.iterdir()):
-            if file_path.is_file() and file_path.suffix.lower() in extensions:
-                examples.append([str(file_path)])
-    return examples
-
-
-# Load image examples (png, jpg, jpeg)
-EXAMPLE_TEST = load_examples_from_dir(EXAMPLE_DIR, {'.png', '.jpg', '.jpeg'})
-
-# Load PDF examples
-EXAMPLE_PDF = load_examples_from_dir(EXAMPLE_PDF_DIR, {'.pdf'})
-
-DESC_DICT = {
+TOOLTIP_DESCRIPTIONS: Dict[str, str] = {
     "use_doc_orientation_classify": "Enable the document image orientation classification module. When enabled, you can correct distorted images, such as wrinkles, tilts, etc.",
     "use_doc_unwarping": "Enable the document unwarping module. When enabled, you can correct distorted images, such as wrinkles, tilts, etc.",
     "use_textline_orientation": "Enable the text line orientation classification module to support the distinction and correction of text lines of 0 degrees and 180 degrees.",
@@ -1388,492 +1501,838 @@ DESC_DICT = {
     "pdf_max_pages_nb": "Maximum number of PDF pages to process. Pages beyond this limit will not be processed.",
 }
 
-tmp_time = {}
-lock = threading.Lock()
 
-
-# ============ 配置变更日志函数 ============
-def log_checkbox_change(name: str):
-    """返回一个记录 Checkbox 变更的函数"""
-    def _log(value):
-        status = "启用" if value else "禁用"
-        logger.info(f"[Settings] {name}: {status}")
-        return value
-    return _log
-
-
-def log_number_change(name: str, unit: str = ""):
-    """返回一个记录 Number 变更的函数"""
-    def _log(value):
-        unit_str = f" {unit}" if unit else ""
-        logger.info(f"[Settings] {name}: {value}{unit_str}")
-        return value
-    return _log
-
-
-def gen_tooltip_radio(desc_dict):
+def generate_tooltip_mappings(desc_dict: Dict[str, str]) -> Dict[str, str]:
+    """Generate tooltip mappings for form elements with various suffixes."""
     tooltip = {}
     for key, desc in desc_dict.items():
-        suffixes = ["_cb", "_rb", "_md"]
         if key.endswith("_nb"):
-            suffix = "_nb"
+            base_key = key[:-3]
             suffixes = ["_nb", "_md"]
-            key = key[: -len(suffix)]
+        else:
+            base_key = key
+            suffixes = ["_cb", "_rb", "_md"]
         for suffix in suffixes:
-            tooltip[f"{key}{suffix}"] = desc
+            tooltip[f"{base_key}{suffix}"] = desc
     return tooltip
 
 
-TOOLTIP_RADIO = gen_tooltip_radio(DESC_DICT)
+TOOLTIP_RADIO = generate_tooltip_mappings(TOOLTIP_DESCRIPTIONS)
+
+# ============================================================================
+# Example Files Loader
+# ============================================================================
+
+def load_examples_from_dir(directory: Path, extensions: set) -> List[List[str]]:
+    """Load all files with specified extensions from directory."""
+    examples = []
+    if directory.exists() and directory.is_dir():
+        for file_path in sorted(directory.iterdir()):
+            if file_path.is_file() and file_path.suffix.lower() in extensions:
+                examples.append([str(file_path)])
+    return examples
 
 
-def url_to_bytes(url, *, timeout=10):
-    """Download image from URL"""
-    resp = requests.get(url, timeout=timeout)
-    resp.raise_for_status()
-    return resp.content
+EXAMPLE_IMAGES = load_examples_from_dir(EXAMPLE_DIR, {'.png', '.jpg', '.jpeg'})
+EXAMPLE_PDFS = load_examples_from_dir(EXAMPLE_PDF_DIR, {'.pdf'})
 
+# ============================================================================
+# Temporary File Manager
+# ============================================================================
 
-def base64_to_bytes(base64_str):
-    """Decode base64 string to bytes"""
-    return base64.b64decode(base64_str)
-
-
-def get_image_bytes(image_data):
-    """Get image bytes from either URL or base64 string"""
-    if image_data is None:
-        return None
+class TempFileManager:
+    """Thread-safe temporary file manager with automatic cleanup."""
     
-    # Check if it's a URL (starts with http:// or https://)
-    if isinstance(image_data, str) and (image_data.startswith('http://') or image_data.startswith('https://')):
-        return url_to_bytes(image_data)
-    # Check if it's a relative URL (starts with /static/)
-    elif isinstance(image_data, str) and image_data.startswith('/static/'):
-        full_url = f"{API_BASE}{image_data}"
-        return url_to_bytes(full_url)
-    # Otherwise assume it's base64
-    elif isinstance(image_data, str):
-        return base64_to_bytes(image_data)
-    else:
-        return None
-
-
-def bytes_to_image(image_bytes):
-    return Image.open(io.BytesIO(image_bytes))
-
-
-# ============ API 处理函数 (适配 DeepX OCR Server - 异步模式) ============
-
-def submit_ocr_task(request_body, headers):
-    """
-    提交 OCR 任务到异步接口
+    def __init__(self, delete_after: int = APP_CONFIG.tmp_delete_time):
+        self._files: Dict[Path, float] = {}
+        self._lock = threading.Lock()
+        self._delete_after = delete_after
     
-    Args:
-        request_body: 请求体
-        headers: 请求头
+    def register(self, file_path: Path) -> None:
+        """Register a temporary file for cleanup tracking."""
+        with self._lock:
+            self._files[file_path] = time.time()
+    
+    def cleanup_expired(self) -> int:
+        """Remove expired files. Returns count of removed files."""
+        current_time = time.time()
+        to_delete = []
         
-    Returns:
-        (task_id, task_type) 元组，失败返回 (None, None)
-    """
-    response = requests.post(
-        API_SUBMIT_URL,
-        json=request_body,
-        headers=headers,
-        timeout=30,
-    )
-    
-    response.raise_for_status()
-    result = response.json()
-    
-    if result.get("errorCode", 0) != 0:
-        raise gr.Error(f"Task submission failed: {result.get('errorMsg', 'Unknown error')}")
-    
-    task_id = result.get("taskId")
-    task_type = result.get("taskType", "image")
-    
-    logger.info(f"[API] 任务已提交: task_id={task_id}, task_type={task_type}")
-    return task_id, task_type
-
-
-def poll_ocr_result(task_id, headers, timeout=POLL_TIMEOUT, interval=POLL_INTERVAL):
-    """
-    轮询获取 OCR 任务结果
-    
-    Args:
-        task_id: 任务 ID
-        headers: 请求头
-        timeout: 超时时间（秒）
-        interval: 轮询间隔（秒）
+        with self._lock:
+            for filepath, created_at in list(self._files.items()):
+                if (current_time - created_at) >= self._delete_after:
+                    if os.path.exists(filepath):
+                        try:
+                            os.remove(filepath)
+                            to_delete.append(filepath)
+                            logger.debug(f"[TempFileManager] Deleted expired file: {filepath}")
+                        except OSError as e:
+                            logger.warning(f"[TempFileManager] Failed to delete {filepath}: {e}")
+                    else:
+                        to_delete.append(filepath)
+            
+            for filepath in to_delete:
+                del self._files[filepath]
         
-    Returns:
-        API 响应结果 JSON
-    """
-    import time
-    start_time = time.time()
-    result_url = f"{API_RESULT_URL}/{task_id}"
+        return len(to_delete)
     
-    while True:
-        elapsed = time.time() - start_time
-        if elapsed > timeout:
-            raise gr.Error(f"OCR processing timeout after {timeout} seconds")
-        
-        response = requests.get(result_url, headers=headers, timeout=30)
-        
-        if response.status_code == 404:
-            raise gr.Error(f"Task not found: {task_id}")
-        
-        response.raise_for_status()
-        result = response.json()
-        
-        status = result.get("status", "")
-        
-        # 202 表示仍在处理中
-        if response.status_code == 202 or status == "processing":
-            logger.debug(f"[API] 任务处理中: task_id={task_id}, elapsed={elapsed:.1f}s")
+    def cleanup_loop(self, interval: int = APP_CONFIG.thread_wakeup_time) -> None:
+        """Continuous cleanup loop for background thread."""
+        while True:
+            deleted = self.cleanup_expired()
+            if deleted > 0:
+                logger.info(f"[TempFileManager] Cleaned up {deleted} expired file(s)")
             time.sleep(interval)
-            continue
-        
-        # 200 表示处理完成
-        if response.status_code == 200 or status == "completed":
-            logger.info(f"[API] 任务完成: task_id={task_id}, elapsed={elapsed:.1f}s")
-            return result
-        
-        # 其他错误
-        if result.get("errorCode", 0) != 0:
-            raise gr.Error(f"OCR processing failed: {result.get('errorMsg', 'Unknown error')}")
-        
-        # 未知状态，继续轮询
-        time.sleep(interval)
 
 
-def process_file(
-    file_path,
-    image_input,
-    use_doc_orientation_classify,
-    use_doc_unwarping,
-    use_textline_orientation,
-    text_det_thresh,
-    text_det_box_thresh,
-    text_det_unclip_ratio,
-    text_rec_score_thresh,
-    pdf_dpi,
-    pdf_max_pages,
-):
-    """Process uploaded file with DeepX OCR Server API"""
-    try:
+temp_file_manager = TempFileManager()
+
+# ============================================================================
+# Image Utilities
+# ============================================================================
+
+class ImageUtils:
+    """Utility class for image processing operations."""
+    
+    @staticmethod
+    def url_to_bytes(url: str, timeout: int = 10) -> ImageBytes:
+        """Download image from URL and return as bytes."""
+        response = requests.get(url, timeout=timeout)
+        response.raise_for_status()
+        return response.content
+    
+    @staticmethod
+    def base64_to_bytes(base64_str: str) -> ImageBytes:
+        """Decode base64 string to bytes."""
+        return base64.b64decode(base64_str)
+    
+    @staticmethod
+    def bytes_to_image(image_bytes: ImageBytes) -> Image.Image:
+        """Convert bytes to PIL Image."""
+        return Image.open(io.BytesIO(image_bytes))
+    
+    @classmethod
+    def get_image_bytes(cls, image_data: Optional[str]) -> Optional[ImageBytes]:
+        """Get image bytes from URL or base64 string."""
+        if image_data is None:
+            return None
+        
+        if image_data.startswith(('http://', 'https://')):
+            return cls.url_to_bytes(image_data)
+        elif image_data.startswith('/static/'):
+            full_url = f"{API_CONFIG.base_url}{image_data}"
+            return cls.url_to_bytes(full_url)
+        else:
+            # Assume base64
+            return cls.base64_to_bytes(image_data)
+
+# ============================================================================
+# OCR API Client
+# ============================================================================
+
+class OCRClient:
+    """Client for interacting with the DeepX OCR Server API."""
+    
+    def __init__(self, config: APIConfig = API_CONFIG):
+        self.config = config
+        self._session: Optional[requests.Session] = None
+    
+    @property
+    def session(self) -> requests.Session:
+        """Lazy-initialized requests session."""
+        if self._session is None:
+            self._session = requests.Session()
+            self._session.headers.update(self.config.headers)
+        return self._session
+    
+    def submit_task(
+        self,
+        file_data: str,
+        file_type: FileType,
+        settings: OCRSettings,
+        visualize: bool = True,
+    ) -> Tuple[str, str]:
+        """
+        Submit an OCR task to the async API.
+        
+        Args:
+            file_data: Base64 encoded file content
+            file_type: Type of file (PDF or IMAGE)
+            settings: OCR processing settings
+            visualize: Whether to generate visualization images
+            
+        Returns:
+            Tuple of (task_id, task_type)
+            
+        Raises:
+            gr.Error: If submission fails
+        """
+        request_body = {
+            "file": file_data,
+            "fileType": file_type.value,
+            "visualize": visualize,
+            **settings.to_api_params(file_type),
+        }
+        
+        try:
+            response = self.session.post(
+                self.config.submit_url,
+                json=request_body,
+                timeout=self.config.request_timeout,
+            )
+            response.raise_for_status()
+            result = response.json()
+            
+            if result.get("errorCode", 0) != 0:
+                error_msg = result.get("errorMsg", "Unknown error")
+                logger.error(f"[OCRClient] Task submission failed: {error_msg}")
+                raise gr.Error(f"Task submission failed: {error_msg}")
+            
+            task_id = result.get("taskId")
+            task_type = result.get("taskType", "image")
+            
+            logger.info(f"[OCRClient] Task submitted: task_id={task_id}, task_type={task_type}")
+            return task_id, task_type
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"[OCRClient] Request failed: {e}")
+            raise gr.Error(f"API request failed: {e}")
+    
+    def poll_result(
+        self,
+        task_id: str,
+        timeout: Optional[float] = None,
+        interval: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """
+        Poll for OCR task result.
+        
+        Args:
+            task_id: The task ID to poll
+            timeout: Maximum time to wait (seconds)
+            interval: Polling interval (seconds)
+            
+        Returns:
+            API response JSON
+            
+        Raises:
+            gr.Error: If polling fails or times out
+        """
+        timeout = timeout or self.config.poll_timeout
+        interval = interval or self.config.poll_interval
+        result_url = f"{self.config.result_url}/{task_id}"
+        start_time = time.time()
+        
+        while True:
+            elapsed = time.time() - start_time
+            if elapsed > timeout:
+                logger.error(f"[OCRClient] Polling timeout after {timeout}s")
+                raise gr.Error(f"OCR processing timeout after {timeout} seconds")
+            
+            try:
+                response = self.session.get(
+                    result_url,
+                    timeout=self.config.request_timeout,
+                )
+                
+                if response.status_code == 404:
+                    raise gr.Error(f"Task not found: {task_id}")
+                
+                response.raise_for_status()
+                result = response.json()
+                status = result.get("status", "")
+                
+                # Still processing
+                if response.status_code == 202 or status == "processing":
+                    logger.debug(f"[OCRClient] Processing: task_id={task_id}, elapsed={elapsed:.1f}s")
+                    time.sleep(interval)
+                    continue
+                
+                # Completed
+                if response.status_code == 200 or status == "completed":
+                    logger.info(f"[OCRClient] Completed: task_id={task_id}, elapsed={elapsed:.1f}s")
+                    return result
+                
+                # Error
+                if result.get("errorCode", 0) != 0:
+                    error_msg = result.get("errorMsg", "Unknown error")
+                    raise gr.Error(f"OCR processing failed: {error_msg}")
+                
+                # Unknown status, continue polling
+                time.sleep(interval)
+                
+            except requests.exceptions.RequestException as e:
+                logger.error(f"[OCRClient] Polling request failed: {e}")
+                raise gr.Error(f"API request failed: {e}")
+    
+    def process(
+        self,
+        file_data: str,
+        file_type: FileType,
+        settings: OCRSettings,
+    ) -> Dict[str, Any]:
+        """
+        Submit task and poll for result (convenience method).
+        
+        Args:
+            file_data: Base64 encoded file content
+            file_type: Type of file
+            settings: OCR processing settings
+            
+        Returns:
+            Complete API response
+        """
+        task_id, _ = self.submit_task(file_data, file_type, settings)
+        return self.poll_result(task_id)
+
+
+# Global OCR client instance
+ocr_client = OCRClient()
+
+# ============================================================================
+# File Processing Service
+# ============================================================================
+
+class FileProcessor:
+    """Service for processing files through OCR pipeline."""
+    
+    def __init__(self, client: OCRClient = ocr_client):
+        self.client = client
+    
+    @staticmethod
+    def detect_file_type(file_path: str) -> FileType:
+        """Detect file type from path extension."""
+        suffix = Path(file_path).suffix.lower()
+        return FileType.PDF if suffix == ".pdf" else FileType.IMAGE
+    
+    @staticmethod
+    def read_file_as_base64(file_path: str) -> str:
+        """Read file and encode as base64."""
+        with open(file_path, "rb") as f:
+            return base64.b64encode(f.read()).decode("ascii")
+    
+    @staticmethod
+    def read_file_bytes(file_path: str) -> bytes:
+        """Read file as bytes."""
+        with open(file_path, "rb") as f:
+            return f.read()
+    
+    def _log_processing_start(
+        self,
+        file_name: str,
+        file_type: FileType,
+        settings: OCRSettings,
+    ) -> None:
+        """Log processing start with settings."""
+        type_str = "PDF" if file_type == FileType.PDF else "Image"
+        logger.info(f"[FileProcessor] Processing: {file_name} (type: {type_str})")
+        logger.info(f"[FileProcessor] Settings:")
+        logger.info(f"  - Orientation Classify: {'ON' if settings.use_doc_orientation_classify else 'OFF'}")
+        logger.info(f"  - Unwarping: {'ON' if settings.use_doc_unwarping else 'OFF'}")
+        logger.info(f"  - Textline Orientation: {'ON' if settings.use_textline_orientation else 'OFF'}")
+        logger.info(f"  - Det Thresh: {settings.text_det_thresh}")
+        logger.info(f"  - Box Thresh: {settings.text_det_box_thresh}")
+        logger.info(f"  - Unclip Ratio: {settings.text_det_unclip_ratio}")
+        logger.info(f"  - Rec Score: {settings.text_rec_score_thresh}")
+        if file_type == FileType.PDF:
+            logger.info(f"  - PDF DPI: {settings.pdf_dpi}")
+            logger.info(f"  - PDF Max Pages: {settings.pdf_max_pages}")
+    
+    def _extract_ocr_images(
+        self,
+        output_json: Dict[str, Any],
+        file_type: FileType,
+        file_bytes: bytes,
+    ) -> Tuple[List[ImageBytes], List[ImageBytes]]:
+        """Extract OCR images from API response."""
+        ocr_images: List[ImageBytes] = []
+        input_images: List[ImageBytes] = []
+        
+        if file_type == FileType.IMAGE:
+            # Single image response
+            ocr_image_url = output_json.get("ocrImage", "")
+            if ocr_image_url:
+                ocr_bytes = ImageUtils.get_image_bytes(ocr_image_url)
+                if ocr_bytes:
+                    ocr_images.append(ocr_bytes)
+            input_images.append(file_bytes)
+        else:
+            # PDF response with multiple pages
+            pages = output_json.get("pages", [])
+            for page in pages:
+                ocr_image_url = page.get("ocrImage", "")
+                if ocr_image_url:
+                    ocr_bytes = ImageUtils.get_image_bytes(ocr_image_url)
+                    if ocr_bytes:
+                        ocr_images.append(ocr_bytes)
+                        input_images.append(ocr_bytes)
+        
+        return ocr_images, input_images
+    
+    def process(
+        self,
+        file_path: Optional[str],
+        image_input: Optional[str],
+        settings: OCRSettings,
+    ) -> Optional[OCRResult]:
+        """
+        Process a file through the OCR pipeline.
+        
+        Args:
+            file_path: Path to uploaded file (PDF or image)
+            image_input: Path to image from examples
+            settings: OCR processing settings
+            
+        Returns:
+            OCRResult containing processing results, or None if no input
+        """
+        # Determine actual file path
         if not file_path and not image_input:
             return None
         
-        if file_path:
-            if Path(file_path).suffix.lower() == ".pdf":
-                file_type = 0  # PDF
-            else:
-                file_type = 1  # Image
-        else:
-            file_path = image_input
-            file_type = 1  # Image
+        actual_path = file_path if file_path else image_input
+        file_type = self.detect_file_type(actual_path)
+        file_name = os.path.basename(actual_path)
         
-        # 记录处理开始和配置参数
-        file_name = os.path.basename(file_path) if file_path else "Unknown"
-        file_type_str = "PDF" if file_type == 0 else "Image"
-        logger.info(f"[Process] 开始处理文件: {file_name} (类型: {file_type_str})")
-        logger.info(f"[Process] 当前配置参数:")
-        logger.info(f"  - Module Selection:")
-        logger.info(f"      图像方向校正: {'启用' if use_doc_orientation_classify else '禁用'}")
-        logger.info(f"      图像畸变校正: {'启用' if use_doc_unwarping else '禁用'}")
-        logger.info(f"      文本行方向校正: {'启用' if use_textline_orientation else '禁用'}")
-        logger.info(f"  - OCR Settings:")
-        logger.info(f"      文本检测像素阈值: {text_det_thresh}")
-        logger.info(f"      文本检测框阈值: {text_det_box_thresh}")
-        logger.info(f"      扩展系数: {text_det_unclip_ratio}")
-        logger.info(f"      文本识别分数阈值: {text_rec_score_thresh}")
-        if file_type == 0:
-            logger.info(f"  - PDF Settings:")
-            logger.info(f"      PDF渲染DPI: {pdf_dpi}")
-            logger.info(f"      PDF最大页数: {pdf_max_pages}")
-        
-        # Read file content
-        with open(file_path, "rb") as f:
-            file_bytes = f.read()
-
-        # Call DeepX OCR Server API
-        file_data = base64.b64encode(file_bytes).decode("ascii")
-        headers = {
-            "Authorization": f"token {TOKEN}",
-            "Content-Type": "application/json",
-        }
-
-        request_body = {
-            "file": file_data,
-            "fileType": file_type,
-            "visualize": True,
-            "useDocOrientationClassify": use_doc_orientation_classify,
-            "useDocUnwarping": use_doc_unwarping,
-            "useTextlineOrientation": use_textline_orientation,
-            "textDetThresh": text_det_thresh,
-            "textDetBoxThresh": text_det_box_thresh,
-            "textDetUnclipRatio": text_det_unclip_ratio,
-            "textRecScoreThresh": text_rec_score_thresh,
-        }
-        
-        # Add PDF-specific parameters
-        if file_type == 0:
-            request_body["pdfDpi"] = int(pdf_dpi)
-            request_body["pdfMaxPages"] = int(pdf_max_pages)
-
-        # Step 1: 提交任务
-        task_id, task_type = submit_ocr_task(request_body, headers)
-        
-        if task_id is None:
-            raise gr.Error("Failed to submit OCR task")
-        
-        # Step 2: 轮询获取结果
-        result = poll_ocr_result(task_id, headers)
-        
-        if result.get("errorCode", 0) != 0:
-            raise gr.Error(f"OCR processing failed: {result.get('errorMsg', 'Unknown error')}")
-        
-        overall_ocr_res_images = []
-        output_json = result.get("result", {})
-        input_images = []
-        
-        # Handle Image response (fileType=1)
-        if file_type == 1:
-            ocr_results = output_json.get("ocrResults", [])
-            ocr_image_url = output_json.get("ocrImage", "")
-            
-            # Get visualization image
-            if ocr_image_url:
-                ocr_image_bytes = get_image_bytes(ocr_image_url)
-                if ocr_image_bytes:
-                    overall_ocr_res_images.append(ocr_image_bytes)
-            
-            # Add original input image
-            input_images.append(file_bytes)
-        
-        # Handle PDF response (fileType=0)
-        else:
-            pages = output_json.get("pages", [])
-            for page in pages:
-                page_index = page.get("pageIndex", 0)
-                ocr_image_url = page.get("ocrImage", "")
-                
-                if ocr_image_url:
-                    ocr_image_bytes = get_image_bytes(ocr_image_url)
-                    if ocr_image_bytes:
-                        overall_ocr_res_images.append(ocr_image_bytes)
-                        input_images.append(ocr_image_bytes)
-
-        # 记录处理完成
-        logger.info(f"[Process] 处理完成: {file_name}")
-        logger.info(f"  - 结果图片数量: {len(overall_ocr_res_images)}")
-        logger.info(f"  - 输入图片数量: {len(input_images)}")
-        
-        return {
-            "original_file": file_path,
-            "file_type": "pdf" if file_type == 0 else "image",
-            "overall_ocr_res_images": overall_ocr_res_images,
-            "output_json": output_json,
-            "input_images": input_images,
-            "api_response": result,
-        }
-
-    except requests.exceptions.RequestException as e:
-        logger.error(f"[Process] API请求失败: {str(e)}")
-        raise gr.Error(f"API request failed: {str(e)}")
-    except Exception as e:
-        logger.error(f"[Process] 处理文件时发生错误: {str(e)}")
-        raise gr.Error(f"Error processing file: {str(e)}")
-
-
-def export_full_results(results):
-    """Create ZIP file with all analysis results"""
-    try:
-        global tmp_time
-        if not results:
-            raise ValueError("No results to export")
-
-        filename = Path(results["original_file"]).stem + f"_{uuid.uuid4().hex}.zip"
-        zip_path = Path(TEMP_DIR.name, filename)
-
-        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
-            for i, img_bytes in enumerate(results["overall_ocr_res_images"]):
-                zipf.writestr(f"overall_ocr_res_images/page_{i+1}.jpg", img_bytes)
-
-            zipf.writestr(
-                "output.json",
-                json.dumps(results["output_json"], indent=2, ensure_ascii=False),
-            )
-
-            # Add API response
-            api_response = results.get("api_response", {})
-            zipf.writestr(
-                "api_response.json",
-                json.dumps(api_response, indent=2, ensure_ascii=False),
-            )
-
-            for i, img_bytes in enumerate(results["input_images"]):
-                zipf.writestr(f"input_images/page_{i+1}.jpg", img_bytes)
-        
-        with lock:
-            tmp_time[zip_path] = time.time()
-        return str(zip_path)
-
-    except Exception as e:
-        raise gr.Error(f"Error creating ZIP file: {str(e)}")
-
-
-def on_file_change_from_examples_image(file):
-    return on_common_change(file, "examples_image")
-
-
-def on_file_change_from_examples_pdf(file):
-    return on_common_change(file, "examples_pdf")
-
-
-def on_file_change_from_input_impl(file_select, self_input, ref_input, called_from):
-    if file_select != '':
-        if ref_input is not None:
-            if self_input is not None:
-                if self_input != ref_input:
-                    return on_common_change(self_input, called_from)
-                else:
-                    return gr.Textbox(value=None, visible=False), gr.File(value=None), gr.Image(value=None)
-            else:
-                return gr.skip(), gr.skip(), gr.skip()
-        else:
-            if self_input is not None:
-                if (file_select in os.path.basename(self_input)):
-                    return gr.Textbox(value=None, visible=False), gr.File(value=None), gr.Image(value=None)
-                else:
-                    return on_common_change(self_input, called_from)
-            else:
-                if self_input is None:
-                    return gr.Textbox(value=None, visible=False), gr.File(value=None), gr.Image(value=None)
-                else:
-                    return gr.skip(), gr.skip(), gr.skip()
-    else:
-        return gr.skip(), gr.skip(), gr.skip()
-
-
-def on_file_change_from_file_input(file_select, self_input, ref_input):
-    return on_file_change_from_input_impl(file_select, self_input, ref_input, "file_input")
-
-
-def on_file_change_from_image_input(file_select, self_input, ref_input):
-    return on_file_change_from_input_impl(file_select, self_input, ref_input, "image_input")
-
-
-def on_common_change_impl(file):
-    """Handle file input change and return status textbox"""
-    if file is not None:
         try:
-            filename = os.path.basename(file.name) if hasattr(file, 'name') else os.path.basename(str(file))
-            return gr.Textbox(value=f"✅ Chosen file: {filename}", visible=True)
-        except Exception:
-            return gr.Textbox(value="✅ File selected", visible=True)
-    return gr.Textbox(value=None, visible=False)
+            # Log start
+            self._log_processing_start(file_name, file_type, settings)
+            
+            # Read and encode file
+            file_bytes = self.read_file_bytes(actual_path)
+            file_data = base64.b64encode(file_bytes).decode("ascii")
+            
+            # Process through OCR API
+            api_response = self.client.process(file_data, file_type, settings)
+            
+            if api_response.get("errorCode", 0) != 0:
+                error_msg = api_response.get("errorMsg", "Unknown error")
+                raise gr.Error(f"OCR processing failed: {error_msg}")
+            
+            # Extract results
+            output_json = api_response.get("result", {})
+            ocr_images, input_images = self._extract_ocr_images(
+                output_json, file_type, file_bytes
+            )
+            
+            # 提取服务器处理时间
+            processing_time_ms = api_response.get("processingTimeMs", 0)
+            
+            result = OCRResult(
+                original_file=actual_path,
+                file_type="pdf" if file_type == FileType.PDF else "image",
+                ocr_images=ocr_images,
+                output_json=output_json,
+                input_images=input_images,
+                api_response=api_response,
+                processing_time_ms=processing_time_ms,
+            )
+            
+            logger.info(f"[FileProcessor] Completed: {file_name}")
+            logger.info(f"  - OCR images: {len(result.ocr_images)}")
+            logger.info(f"  - Input images: {len(result.input_images)}")
+            logger.info(f"  - Server processing time: {processing_time_ms} ms")
+            
+            return result
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"[FileProcessor] API request failed: {e}")
+            raise gr.Error(f"API request failed: {e}")
+        except Exception as e:
+            logger.error(f"[FileProcessor] Processing error: {e}")
+            raise gr.Error(f"Error processing file: {e}")
 
 
-def on_common_change(file, called_from):
-    """Handle file input change and return status textbox"""
-    input_select = on_common_change_impl(file)
+# Global file processor instance
+file_processor = FileProcessor()
 
-    if called_from == 'examples_image':
-        file_input = gr.File(value=None)
-        image_input = gr.skip()
-    elif called_from == 'examples_pdf':
-        file_input = gr.skip()
-        image_input = gr.Image(value=None)
-    elif called_from == 'file_input':
-        file_input = gr.skip()
-        image_input = gr.Image(value=None)
-    elif called_from == 'image_input':
-        file_input = gr.File(value=None)
-        image_input = gr.skip()
-    else:
-        raise ValueError("Invalid called_from value")
+# ============================================================================
+# Result Export Service
+# ============================================================================
+
+class ResultExporter:
+    """Service for exporting OCR results."""
     
-    return input_select, file_input, image_input
+    def __init__(self, temp_dir: str = TEMP_DIR.name):
+        self.temp_dir = Path(temp_dir)
+    
+    def export_to_zip(self, result: OCRResult) -> str:
+        """
+        Export OCR results to a ZIP file.
+        
+        Args:
+            result: OCR processing result
+            
+        Returns:
+            Path to the created ZIP file
+        """
+        if not result:
+            raise ValueError("No results to export")
+        
+        # Generate unique filename
+        base_name = Path(result.original_file).stem
+        filename = f"{base_name}_{uuid.uuid4().hex[:8]}.zip"
+        zip_path = self.temp_dir / filename
+        
+        try:
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+                # Add OCR result images
+                for i, img_bytes in enumerate(result.ocr_images):
+                    zipf.writestr(f"ocr_results/page_{i+1}.jpg", img_bytes)
+                
+                # Add output JSON
+                zipf.writestr(
+                    "output.json",
+                    json.dumps(result.output_json, indent=2, ensure_ascii=False),
+                )
+                
+                # Add API response
+                zipf.writestr(
+                    "api_response.json",
+                    json.dumps(result.api_response, indent=2, ensure_ascii=False),
+                )
+                
+                # Add input images
+                for i, img_bytes in enumerate(result.input_images):
+                    zipf.writestr(f"input_images/page_{i+1}.jpg", img_bytes)
+            
+            # Register for cleanup
+            temp_file_manager.register(zip_path)
+            
+            logger.info(f"[ResultExporter] Created ZIP: {zip_path}")
+            return str(zip_path)
+            
+        except Exception as e:
+            logger.error(f"[ResultExporter] Export failed: {e}")
+            raise gr.Error(f"Error creating ZIP file: {e}")
 
 
-def validate_file_input(file_path, image_input):
-    """Validate file selection"""
-    if not file_path and not image_input:
-        gr.Warning("📁 Please select a file first before parsing.")
+# Global exporter instance
+result_exporter = ResultExporter()
 
+# ============================================================================
+# UI Event Handlers
+# ============================================================================
 
-def toggle_spinner(file_path, image_input):
-    """Show spinner when file is present, hide results content"""
-    if not file_path and not image_input:
+class UIEventHandler:
+    """Centralized handler for UI events."""
+    
+    @staticmethod
+    def create_settings_logger(name: str, unit: str = "") -> Callable[[Any], Any]:
+        """Create a logging callback for settings changes."""
+        def _log(value: Any) -> Any:
+            if isinstance(value, bool):
+                status = "ON" if value else "OFF"
+                logger.info(f"[Settings] {name}: {status}")
+            else:
+                unit_str = f" {unit}" if unit else ""
+                logger.info(f"[Settings] {name}: {value}{unit_str}")
+            return value
+        return _log
+    
+    @staticmethod
+    def validate_file_input(file_path: Optional[str], image_input: Optional[str]) -> None:
+        """Validate that a file has been selected."""
+        if not file_path and not image_input:
+            gr.Warning("📁 Please select a file first before parsing.")
+    
+    @staticmethod
+    def toggle_spinner(
+        file_path: Optional[str],
+        image_input: Optional[str],
+    ) -> Tuple[Any, ...]:
+        """Toggle spinner visibility based on file presence."""
+        if not file_path and not image_input:
+            return gr.skip(), gr.skip(), gr.skip(), gr.skip()
         return (
-            gr.skip(),
-            gr.skip(),
-            gr.skip(),
-            gr.skip(),
+            gr.Column(visible=True),   # loading_spinner
+            gr.Column(visible=False),  # prepare_spinner
+            gr.File(visible=False),    # download_file
+            gr.Column(visible=False),  # results_content
         )
-    return (
-        gr.Column(visible=True),   # loading_spinner: show
-        gr.Column(visible=False),  # prepare_spinner: hide
-        gr.File(visible=False),    # download_file: hide
-        gr.Column(visible=False),  # results_content: hide
-    )
-
-
-def hide_spinner(results):
-    """Hide spinner and show results content when results are available"""
-    if results:
-        return gr.Column(visible=False), gr.Column(visible=True)
-    else:
+    
+    @staticmethod
+    def hide_spinner(results: Optional[OCRResult]) -> Tuple[Any, Any]:
+        """Hide spinner and show results when available."""
+        if results:
+            return gr.Column(visible=False), gr.Column(visible=True)
         return gr.Column(visible=False), gr.skip()
-
-
-def update_display(results):
-    if not results:
-        # 返回隐藏状态的控件 (JSON, Gallery, Download按钮行)
-        return [gr.skip()] * (1 + len(gallery_list) + 1)
     
-    # Prepare JSON output (显示在 JSON Tab 的可滚动区域) - 显示并更新值
-    output_json = [gr.JSON(value=results["output_json"], visible=True)]
+    @staticmethod
+    def clear_previous_results(gallery_count: int) -> List[Any]:
+        """
+        Clear previous OCR results when starting a new task.
+        
+        Args:
+            gallery_count: Number of gallery components
+            
+        Returns:
+            List of cleared Gradio component updates (processing_time, JSON, Gallery, Download button)
+        """
+        # Clear values (components stay visible in tabs, just clear content)
+        return (
+            [gr.HTML(value="", visible=False)] +  # Processing time - clear and hide
+            [gr.JSON(value=None)] +  # JSON output - clear value
+            [gr.Gallery(value=None)] * gallery_count +  # Galleries - clear value
+            [gr.Row(visible=False)]  # Download button row - hide
+        )
     
-    # Prepare gallery images from OCR result images (显示在 OCR Tab 的可滚动 Gallery)
-    gallery_images = []
-    for img_data in results["overall_ocr_res_images"]:
-        if isinstance(img_data, bytes):
-            gallery_images.append(bytes_to_image(img_data))
+    @staticmethod
+    def get_file_status_text(file_path: Optional[str]) -> gr.Textbox:
+        """Get status text for file selection."""
+        if file_path is not None:
+            try:
+                if hasattr(file_path, 'name'):
+                    filename = os.path.basename(file_path.name)
+                else:
+                    filename = os.path.basename(str(file_path))
+                return gr.Textbox(value=f"✅ Chosen file: {filename}", visible=True)
+            except Exception:
+                return gr.Textbox(value="✅ File selected", visible=True)
+        return gr.Textbox(value=None, visible=False)
+    
+    @classmethod
+    def on_file_change(
+        cls,
+        file: Any,
+        source: str,
+    ) -> Tuple[gr.Textbox, gr.File, gr.Image]:
+        """Handle file input change from various sources."""
+        status = cls.get_file_status_text(file)
+        
+        if source == 'examples_image':
+            return status, gr.File(value=None), gr.skip()
+        elif source == 'examples_pdf':
+            return status, gr.skip(), gr.Image(value=None)
+        elif source == 'file_input':
+            return status, gr.skip(), gr.Image(value=None)
+        elif source == 'image_input':
+            return status, gr.File(value=None), gr.skip()
         else:
-            gallery_images.append(img_data)
+            raise ValueError(f"Invalid source: {source}")
     
-    # Update OCR Gallery with the OCR result images - 显示并更新值
-    gallery_list_imgs = [gr.Gallery(value=gallery_images, visible=True)]
+    @classmethod
+    def on_input_change(
+        cls,
+        file_select: str,
+        self_input: Optional[str],
+        ref_input: Optional[str],
+        source: str,
+    ) -> Tuple[gr.Textbox, gr.File, gr.Image]:
+        """Handle input change with mutual exclusion logic."""
+        if not file_select:
+            return gr.skip(), gr.skip(), gr.skip()
+        
+        if self_input is None:
+            return (
+                gr.Textbox(value=None, visible=False),
+                gr.File(value=None),
+                gr.Image(value=None),
+            )
+        
+        if ref_input is not None:
+            if self_input != ref_input:
+                return cls.on_file_change(self_input, source)
+            return (
+                gr.Textbox(value=None, visible=False),
+                gr.File(value=None),
+                gr.Image(value=None),
+            )
+        
+        # ref_input is None
+        if file_select in os.path.basename(self_input):
+            return (
+                gr.Textbox(value=None, visible=False),
+                gr.File(value=None),
+                gr.Image(value=None),
+            )
+        return cls.on_file_change(self_input, source)
+
+
+# Create event handler instance
+ui_handler = UIEventHandler()
+
+# ============================================================================
+# Gradio Interface Functions (Adapters)
+# ============================================================================
+
+def process_file(
+    file_path: Optional[str],
+    image_input: Optional[str],
+    use_doc_orientation_classify: bool,
+    use_doc_unwarping: bool,
+    use_textline_orientation: bool,
+    text_det_thresh: float,
+    text_det_box_thresh: float,
+    text_det_unclip_ratio: float,
+    text_rec_score_thresh: float,
+    pdf_dpi: int,
+    pdf_max_pages: int,
+) -> Optional[Dict[str, Any]]:
+    """
+    Process uploaded file with DeepX OCR Server API.
     
-    # Download 按钮行 - 显示
-    download_btn_visible = [gr.Row(visible=True)]
+    This is the main entry point called by the Gradio UI.
+    """
+    settings = OCRSettings(
+        use_doc_orientation_classify=use_doc_orientation_classify,
+        use_doc_unwarping=use_doc_unwarping,
+        use_textline_orientation=use_textline_orientation,
+        text_det_thresh=text_det_thresh,
+        text_det_box_thresh=text_det_box_thresh,
+        text_det_unclip_ratio=text_det_unclip_ratio,
+        text_rec_score_thresh=text_rec_score_thresh,
+        pdf_dpi=pdf_dpi,
+        pdf_max_pages=pdf_max_pages,
+    )
     
-    return output_json + gallery_list_imgs + download_btn_visible
+    result = file_processor.process(file_path, image_input, settings)
+    
+    if result is None:
+        return None
+    
+    # Convert to dict for Gradio state (maintaining backward compatibility)
+    return {
+        "original_file": result.original_file,
+        "file_type": result.file_type,
+        "overall_ocr_res_images": result.ocr_images,
+        "output_json": result.output_json,
+        "input_images": result.input_images,
+        "api_response": result.api_response,
+        "processing_time_ms": result.processing_time_ms,
+    }
 
 
-def delete_file_periodically():
-    global tmp_time
-    while True:
-        current_time = time.time()
-        delete_tmp = []
-        for filename, start_time in list(tmp_time.items()):
-            if (current_time - start_time) >= TMP_DELETE_TIME:
-                if os.path.exists(filename):
-                    os.remove(filename)
-                    delete_tmp.append(filename)
-        for filename in delete_tmp:
-            with lock:
-                del tmp_time[filename]
-        time.sleep(THREAD_WAKEUP_TIME)
+def export_full_results(results: Optional[Dict[str, Any]]) -> str:
+    """Export results to ZIP file."""
+    if not results:
+        raise gr.Error("No results to export")
+    
+    # Convert dict back to OCRResult
+    result = OCRResult(
+        original_file=results["original_file"],
+        file_type=results["file_type"],
+        ocr_images=results["overall_ocr_res_images"],
+        output_json=results["output_json"],
+        input_images=results["input_images"],
+        api_response=results.get("api_response", {}),
+        processing_time_ms=results.get("processing_time_ms", 0),
+    )
+    
+    return result_exporter.export_to_zip(result)
 
 
-# Banner paths
-BANNER_PATH = str(BASE_DIR / "res" / "img" / "deepx-baidu-pp-banner.png")
-BANNER_CES_PATH = str(BASE_DIR / "res" / "img" / "DEEPX-Banner-CES-2026-01.png")
+# ============================================================================
+# Display Update Handler
+# ============================================================================
 
-# Force English language script
+class DisplayHandler:
+    """Handler for updating display components with OCR results."""
+    
+    @staticmethod
+    def update(
+        results: Optional[Dict[str, Any]],
+        gallery_count: int,
+    ) -> List[Any]:
+        """
+        Update display with OCR results.
+        
+        Args:
+            results: OCR processing results dictionary
+            gallery_count: Number of gallery components
+            
+        Returns:
+            List of Gradio component updates (processing_time, JSON, Gallery, Download button row)
+        """
+        if not results:
+            # Return skip for all components (processing_time, JSON, Gallery, Download button row)
+            return [gr.skip()] * (1 + 1 + gallery_count + 1)
+        
+        # 格式化处理时间显示
+        processing_time_ms = results.get("processing_time_ms", 0)
+        if processing_time_ms > 0:
+            if processing_time_ms >= 1000:
+                time_str = f"{processing_time_ms / 1000:.2f}s"
+            else:
+                time_str = f"{processing_time_ms}ms"
+            processing_time_html = gr.HTML(
+                value=f'''
+                <div style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; 
+                            background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%); 
+                            border-radius: 8px; border-left: 3px solid #2932E1; margin-bottom: 12px;">
+                    <span style="font-size: 16px;">⏱️</span>
+                    <span style="font-weight: 500; color: #140E35;">Server Processing Time:</span>
+                    <span style="font-weight: 600; color: #2932E1; font-size: 16px;">{time_str}</span>
+                </div>
+                ''',
+                visible=True,
+            )
+        else:
+            processing_time_html = gr.HTML(value="", visible=False)
+        
+        # Prepare JSON output (no visibility change needed - inside tab)
+        output_json = [gr.JSON(value=results["output_json"])]
+        
+        # Prepare gallery images from OCR result images
+        gallery_images = []
+        for img_data in results["overall_ocr_res_images"]:
+            if isinstance(img_data, bytes):
+                gallery_images.append(ImageUtils.bytes_to_image(img_data))
+            else:
+                gallery_images.append(img_data)
+        
+        # Update OCR Gallery (no visibility change needed - inside tab)
+        gallery_list_imgs = [gr.Gallery(value=gallery_images)]
+        
+        # Download button row - make visible
+        download_btn_visible = [gr.Row(visible=True)]
+        
+        return [processing_time_html] + output_json + gallery_list_imgs + download_btn_visible
+
+
+# Global display handler
+display_handler = DisplayHandler()
+
+
+# ============================================================================
+# Settings Change Logger Factory
+# ============================================================================
+
+class SettingsLogger:
+    """Factory for creating settings change logging callbacks."""
+    
+    @staticmethod
+    def checkbox(name: str) -> Callable[[bool], bool]:
+        """Create a logging callback for checkbox changes."""
+        def _log(value: bool) -> bool:
+            status = "ON" if value else "OFF"
+            logger.info(f"[Settings] {name}: {status}")
+            return value
+        return _log
+    
+    @staticmethod
+    def slider(name: str, unit: str = "") -> Callable[[float], float]:
+        """Create a logging callback for slider changes."""
+        def _log(value: float) -> float:
+            unit_str = f" {unit}" if unit else ""
+            logger.info(f"[Settings] {name}: {value}{unit_str}")
+            return value
+        return _log
+    
+    @staticmethod
+    def number(name: str, unit: str = "") -> Callable[[Any], Any]:
+        """Create a logging callback for number input changes."""
+        def _log(value: Any) -> Any:
+            unit_str = f" {unit}" if unit else ""
+            logger.info(f"[Settings] {name}: {value}{unit_str}")
+            return value
+        return _log
+
+
+# ============================================================================
+# Force English Language Script
+# ============================================================================
+
 FORCE_EN_SCRIPT = """
 <script>
     try {
@@ -1941,40 +2400,40 @@ with gr.Blocks(css=CSS, title=TITLE, theme=paddle_theme, head=FORCE_EN_SCRIPT) a
                 )
 
                 examples_image = gr.Examples(
-                    fn=on_file_change_from_examples_image,
+                    fn=lambda f: ui_handler.on_file_change(f, "examples_image"),
                     inputs=image_input,
                     outputs=[file_select, file_input, image_input],
                     examples_per_page=8,
-                    examples=EXAMPLE_TEST,
+                    examples=EXAMPLE_IMAGES,
                     run_on_click=True,
                 )
                 
                 gr.Markdown("##### 📄 PDF Examples", elem_classes="custom-markdown")
                 examples_pdf = gr.Examples(
-                    fn=on_file_change_from_examples_pdf,
+                    fn=lambda f: ui_handler.on_file_change(f, "examples_pdf"),
                     inputs=file_input,
                     outputs=[file_select, file_input, image_input],
                     examples_per_page=5,
-                    examples=EXAMPLE_PDF,
+                    examples=EXAMPLE_PDFS,
                     run_on_click=True,
                 )
 
                 image_input.change(
-                    fn=on_file_change_from_image_input,
+                    fn=lambda fs, si, ri: ui_handler.on_input_change(fs, si, ri, "image_input"),
                     inputs=[file_select, image_input, file_input],
                     outputs=[file_select, file_input, image_input],
                 )
 
                 file_input.change(
-                    fn=on_file_change_from_file_input, 
+                    fn=lambda fs, si, ri: ui_handler.on_input_change(fs, si, ri, "file_input"),
                     inputs=[file_select, file_input, image_input],
                     outputs=[file_select, file_input, image_input]
                 )
             
             # Settings section
             gr.Markdown("#### ⚙️ Settings", elem_classes="custom-markdown")
-            with gr.Tabs() as advance_options_tabs:
-                with gr.Tab("Module Selection") as Module_Options:
+            with gr.Tabs():
+                with gr.Tab("Module Selection"):
                     use_doc_orientation_classify_cb = gr.Checkbox(
                         value=False,
                         interactive=True,
@@ -1997,7 +2456,7 @@ with gr.Blocks(css=CSS, title=TITLE, theme=paddle_theme, head=FORCE_EN_SCRIPT) a
                         elem_id="use_textline_orientation_cb",
                     )
                 
-                with gr.Tab("OCR Settings") as Text_detection_Options:
+                with gr.Tab("OCR Settings"):
                     text_det_thresh_nb = gr.Number(
                         value=0.30,
                         step=0.01,
@@ -2039,7 +2498,7 @@ with gr.Blocks(css=CSS, title=TITLE, theme=paddle_theme, head=FORCE_EN_SCRIPT) a
                         elem_id="text_rec_score_thresh_nb",
                     )
 
-                with gr.Tab("PDF Settings") as PDF_Options:
+                with gr.Tab("PDF Settings"):
                     pdf_dpi_nb = gr.Number(
                         value=150,
                         step=10,
@@ -2133,33 +2592,44 @@ with gr.Blocks(css=CSS, title=TITLE, theme=paddle_theme, head=FORCE_EN_SCRIPT) a
             gallery_list = []
             
             # Results 内容区域 - 初始隐藏，只有在收到响应后才显示
-            # OCR 图片和 JSON 一起显示，无需 Tab 切换
             with gr.Column(visible=False, elem_id="results-content-wrapper") as results_content:
-                # OCR 识别结果图片：垂直滚动显示 - 初始隐藏
-                gallery_ocr_det = gr.Gallery(
-                    show_label=False,
-                    allow_preview=False,  # 禁用双击放大预览功能
-                    preview=False,
-                    columns=1,
-                    rows=None,
-                    height="auto",
-                    object_fit="contain",
-                    elem_classes=["ocr-result-gallery-vertical"],
-                    elem_id="ocr-gallery-scrollable",
+                # 处理时间显示
+                processing_time_html = gr.HTML(
+                    value="",
                     visible=False,
-                )
-                gallery_list.append(gallery_ocr_det)
-                
-                # JSON 输出：可滚动的 JSON 显示控件 - 初始隐藏
-                output_json_list.append(
-                    gr.JSON(
-                        visible=False,
-                        elem_id="json-output-scrollable",
-                        elem_classes=["json-output-container"],
-                    )
+                    elem_id="processing-time-display",
+                    elem_classes=["processing-time-container"],
                 )
                 
-                # Download 按钮容器 - 初始隐藏
+                # Tab 切换：OCR Output / JSON Result
+                with gr.Tabs(elem_id="results-tabs"):
+                    with gr.Tab("OCR Output", elem_id="tab-ocr-output"):
+                        # OCR 识别结果图片：垂直滚动显示
+                        gallery_ocr_det = gr.Gallery(
+                            show_label=False,
+                            allow_preview=False,
+                            preview=False,
+                            columns=1,
+                            rows=None,
+                            height="auto",
+                            object_fit="contain",
+                            elem_classes=["ocr-result-gallery-vertical"],
+                            elem_id="ocr-gallery-scrollable",
+                            visible=True,
+                        )
+                        gallery_list.append(gallery_ocr_det)
+                    
+                    with gr.Tab("JSON Result", elem_id="tab-json-result"):
+                        # JSON 输出：可滚动的 JSON 显示控件
+                        output_json_list.append(
+                            gr.JSON(
+                                visible=True,
+                                elem_id="json-output-scrollable",
+                                elem_classes=["json-output-container"],
+                            )
+                        )
+                
+                # Download 按钮容器 - 固定在底部
                 with gr.Row(visible=False, elem_classes=["download-btn-container"]) as download_btn_row:
                     download_all_btn = gr.Button(
                         "📦 Download Full Results (ZIP)",
@@ -2187,16 +2657,20 @@ with gr.Blocks(css=CSS, title=TITLE, theme=paddle_theme, head=FORCE_EN_SCRIPT) a
         </button>
         """
     )
-
-    gr.Markdown("", elem_classes="custom-markdown")
     
     # ============ 事件处理 ============
     process_btn.click(
-        validate_file_input,
+        UIEventHandler.validate_file_input,
         inputs=[file_input, image_input],
         outputs=[],
     ).then(
-        toggle_spinner,
+        # Step 1: Clear previous results immediately when button is clicked
+        lambda: UIEventHandler.clear_previous_results(len(gallery_list)),
+        inputs=[],
+        outputs=[processing_time_html] + output_json_list + gallery_list + [download_btn_row],
+    ).then(
+        # Step 2: Show loading spinner after clearing
+        UIEventHandler.toggle_spinner,
         inputs=[file_input, image_input],
         outputs=[
             loading_spinner,
@@ -2205,6 +2679,7 @@ with gr.Blocks(css=CSS, title=TITLE, theme=paddle_theme, head=FORCE_EN_SCRIPT) a
             results_content,
         ],
     ).then(
+        # Step 3: Process the file
         process_file,
         inputs=[
             file_input,
@@ -2221,61 +2696,65 @@ with gr.Blocks(css=CSS, title=TITLE, theme=paddle_theme, head=FORCE_EN_SCRIPT) a
         ],
         outputs=[results_state],
     ).then(
-        hide_spinner, inputs=[results_state], outputs=[loading_spinner, results_content]
+        # Step 4: Hide spinner and show results area
+        UIEventHandler.hide_spinner, 
+        inputs=[results_state], 
+        outputs=[loading_spinner, results_content]
     ).then(
-        update_display,
+        # Step 5: Display new results
+        lambda r: display_handler.update(r, len(gallery_list)),
         inputs=[results_state],
-        outputs=output_json_list + gallery_list + [download_btn_row],
+        outputs=[processing_time_html] + output_json_list + gallery_list + [download_btn_row],
     )
 
     # ============ 配置变更日志事件 ============
     # Module Selection 配置
     use_doc_orientation_classify_cb.change(
-        fn=log_checkbox_change("Image Orientation Correction (图像方向校正)"),
+        fn=SettingsLogger.checkbox("Image Orientation Correction (图像方向校正)"),
         inputs=[use_doc_orientation_classify_cb],
         outputs=[use_doc_orientation_classify_cb],
     )
     use_doc_unwarping_cb.change(
-        fn=log_checkbox_change("Image Distortion Correction (图像畸变校正)"),
+        fn=SettingsLogger.checkbox("Image Distortion Correction (图像畸变校正)"),
         inputs=[use_doc_unwarping_cb],
         outputs=[use_doc_unwarping_cb],
     )
     use_textline_orientation_cb.change(
-        fn=log_checkbox_change("Text Line Orientation Correction (文本行方向校正)"),
+        fn=SettingsLogger.checkbox("Text Line Orientation Correction (文本行方向校正)"),
         inputs=[use_textline_orientation_cb],
         outputs=[use_textline_orientation_cb],
     )
     
     # OCR Settings 配置
     text_det_thresh_nb.change(
-        fn=log_number_change("Text Detection Pixel Threshold (文本检测像素阈值)"),
+        fn=SettingsLogger.number("Text Detection Pixel Threshold (文本检测像素阈值)"),
         inputs=[text_det_thresh_nb],
         outputs=[text_det_thresh_nb],
     )
     text_det_box_thresh_nb.change(
-        fn=log_number_change("Text Detection Box Threshold (文本检测框阈值)"),
+        fn=SettingsLogger.number("Text Detection Box Threshold (文本检测框阈值)"),
         inputs=[text_det_box_thresh_nb],
         outputs=[text_det_box_thresh_nb],
     )
     text_det_unclip_ratio_nb.change(
-        fn=log_number_change("Expansion Coefficient (扩展系数)"),
+        fn=SettingsLogger.number("Expansion Coefficient (扩展系数)"),
         inputs=[text_det_unclip_ratio_nb],
         outputs=[text_det_unclip_ratio_nb],
     )
     text_rec_score_thresh_nb.change(
-        fn=log_number_change("Text Recognition Score Threshold (文本识别分数阈值)"),
+        fn=SettingsLogger.number("Text Recognition Score Threshold (文本识别分数阈值)"),
         inputs=[text_rec_score_thresh_nb],
         outputs=[text_rec_score_thresh_nb],
     )
     
     # PDF Settings 配置
     pdf_dpi_nb.change(
-        fn=log_number_change("PDF Render DPI (PDF渲染DPI)", "DPI"),
+        fn=SettingsLogger.number("PDF Render DPI (PDF渲染DPI)", "DPI"),
         inputs=[pdf_dpi_nb],
         outputs=[pdf_dpi_nb],
     )
     pdf_max_pages_nb.change(
-        fn=log_number_change("PDF Max Pages (PDF最大页数)", "页"),
+        fn=SettingsLogger.number("PDF Max Pages (PDF最大页数)", "页"),
         inputs=[pdf_max_pages_nb],
         outputs=[pdf_max_pages_nb],
     )
@@ -2472,18 +2951,27 @@ with gr.Blocks(css=CSS, title=TITLE, theme=paddle_theme, head=FORCE_EN_SCRIPT) a
     )
 
 if __name__ == "__main__":
-    t = threading.Thread(target=delete_file_periodically, daemon=True)
-    t.start()
+    # Start background cleanup thread for temporary files
+    cleanup_thread = threading.Thread(
+        target=temp_file_manager.cleanup_loop,
+        daemon=True,
+        name="TempFileCleanup",
+    )
+    cleanup_thread.start()
+    logger.info("[Main] Started temporary file cleanup thread")
 
+    # Configure allowed paths for static file serving
     allowed_dirs = [
         str(BASE_DIR / "res"), 
         str(BASE_DIR / "examples"),
         str(BASE_DIR / "examples_pdf"),
     ]
 
+    # Launch Gradio demo
+    logger.info(f"[Main] Starting {APP_CONFIG.title} on port {APP_CONFIG.server_port}")
     demo.launch(
         server_name="0.0.0.0",
-        server_port=7860,
+        server_port=APP_CONFIG.server_port,
         show_error=True,
         inbrowser=False,
         allowed_paths=allowed_dirs,

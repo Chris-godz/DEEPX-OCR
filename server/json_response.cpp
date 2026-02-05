@@ -18,12 +18,18 @@ std::string JsonResponseBuilder::GenerateUUID() {
 
 json JsonResponseBuilder::BuildSuccessResponse(
     const std::vector<ocr::PipelineOCRResult>& results,
-    const std::string& vis_image_url) {
+    const std::string& vis_image_url,
+    int64_t processing_time_ms) {
     
     json response;
     response["logId"] = GenerateUUID();
     response["errorCode"] = ErrorCode::SUCCESS;
     response["errorMsg"] = "Success";
+    
+    // 添加处理时间（如果提供）
+    if (processing_time_ms >= 0) {
+        response["processingTimeMs"] = processing_time_ms;
+    }
     
     json ocr_results = json::array();
     for (const auto& result : results) {
@@ -81,12 +87,18 @@ json JsonResponseBuilder::ConvertOCRResultToJson(
 json JsonResponseBuilder::BuildPDFSuccessResponse(
     const json& pages_results,
     int totalPages,
-    int renderedPages) {
+    int renderedPages,
+    int64_t processing_time_ms) {
     
     json response;
     response["logId"] = GenerateUUID();
     response["errorCode"] = ErrorCode::SUCCESS;
     response["errorMsg"] = "Success";
+    
+    // 添加处理时间（如果提供）
+    if (processing_time_ms >= 0) {
+        response["processingTimeMs"] = processing_time_ms;
+    }
     
     json result;
     result["totalPages"] = totalPages;

@@ -600,8 +600,14 @@ bool OCRHandler::TryGetImageResult(int64_t task_id, json& response_json) {
         }
     }
     
-    // 6. 构建成功响应
-    response_json = JsonResponseBuilder::BuildSuccessResponse(result.results, vis_url);
+    // 6. 计算处理时间
+    auto now = std::chrono::steady_clock::now();
+    int64_t processing_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now - meta.createTime).count();
+    LOG_INFO("[RESULT] Image task {} processing time: {} ms", task_id, processing_time_ms);
+    
+    // 7. 构建成功响应
+    response_json = JsonResponseBuilder::BuildSuccessResponse(result.results, vis_url, processing_time_ms);
     return true;
 }
 
@@ -703,8 +709,14 @@ bool OCRHandler::TryGetPDFResult(int64_t task_id, json& response_json) {
         pagesArray.push_back(pageJson);
     }
     
+    // 计算处理时间
+    auto now = std::chrono::steady_clock::now();
+    int64_t processing_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now - meta.createTime).count();
+    LOG_INFO("[RESULT] PDF task {} processing time: {} ms", task_id, processing_time_ms);
+    
     response_json = JsonResponseBuilder::BuildPDFSuccessResponse(
-        pagesArray, meta.totalPages, meta.renderedPages);
+        pagesArray, meta.totalPages, meta.renderedPages, processing_time_ms);
     
     return true;
 }

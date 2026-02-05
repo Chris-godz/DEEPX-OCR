@@ -11,7 +11,7 @@ server:
 # 模型配置
 model:
   # 模型类型: server 或 mobile
-  type: mobile
+  type: server
 
 # 目录配置
 directories:
