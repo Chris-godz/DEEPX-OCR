@@ -29,7 +29,7 @@ list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
 
 include(dx_func)
 
-add_definitions(-DPROJECT_ROOT_DIR="${CMAKE_SOURCE_DIR}")
+add_definitions(-DPROJECT_ROOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 add_compile_options(-W -Wall -pthread -fPIC)
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
@@ -53,30 +53,32 @@ endif()
 # ========================================
 include(cmake/BuildOpenCV.cmake)
 
-# Add 3rd-party libraries
-add_subdirectory(3rd-party/json)
+# Add 3rd-party libraries (skip when parent already provides them)
+if(NOT DXNN_OCR_AS_SUBPROJECT)
+    add_subdirectory(3rd-party/json)
+    add_subdirectory(3rd-party/spdlog)
 
-# Add spdlog (logging library)
-add_subdirectory(3rd-party/spdlog)
-
-# Suppress warnings from 3rd-party libraries
-set(CMAKE_CXX_FLAGS_BACKUP "${CMAKE_CXX_FLAGS}")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -w")  # Disable all warnings
-
-# 关闭 clipper2 的测试和示例编译，避免 gtest pthread 链接问题
-set(CLIPPER2_TESTS OFF CACHE BOOL "" FORCE)
-set(CLIPPER2_EXAMPLES OFF CACHE BOOL "" FORCE)
-
-add_subdirectory(3rd-party/clipper2/CPP)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS_BACKUP}")
+    set(CMAKE_CXX_FLAGS_BACKUP "${CMAKE_CXX_FLAGS}")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -w")
+    set(CLIPPER2_TESTS OFF CACHE BOOL "" FORCE)
+    set(CLIPPER2_EXAMPLES OFF CACHE BOOL "" FORCE)
+    add_subdirectory(3rd-party/clipper2/CPP)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS_BACKUP}")
+endif()
 
 # Global include directories
-include_directories(${CMAKE_SOURCE_DIR}/include)
-include_directories(${CMAKE_SOURCE_DIR}/3rd-party/json/include)
-include_directories(${CMAKE_SOURCE_DIR}/3rd-party/spdlog/include)
-
-# Use SYSTEM to suppress warnings from 3rd-party libraries
-include_directories(SYSTEM ${CMAKE_SOURCE_DIR}/3rd-party/clipper2/CPP/Clipper2Lib/include)
+if(DXNN_OCR_AS_SUBPROJECT)
+    # Use parent's include paths, plus our own headers
+    include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
+    include_directories(${CMAKE_SOURCE_DIR}/3rd-party/json/include)
+    include_directories(${CMAKE_SOURCE_DIR}/3rd-party/spdlog/include)
+    include_directories(SYSTEM ${CMAKE_SOURCE_DIR}/3rd-party/clipper2/CPP/Clipper2Lib/include)
+else()
+    include_directories(${CMAKE_SOURCE_DIR}/include)
+    include_directories(${CMAKE_SOURCE_DIR}/3rd-party/json/include)
+    include_directories(${CMAKE_SOURCE_DIR}/3rd-party/spdlog/include)
+    include_directories(SYSTEM ${CMAKE_SOURCE_DIR}/3rd-party/clipper2/CPP/Clipper2Lib/include)
+endif()
 
 # Add subdirectories
 add_subdirectory(src/common)
@@ -88,23 +90,17 @@ add_subdirectory(src/pipeline)
 # add_subdirectory(src/ocr_engine)
 
 # ========================================
-# Server Subdirectory (HTTP API Server)
+# Server, Test, Benchmark (skip when sub-project)
 # ========================================
-option(BUILD_SERVER "Build HTTP API server" ON)
-if(BUILD_SERVER)
-    message(STATUS "Building HTTP API server")
-    add_subdirectory(server)
+if(NOT DXNN_OCR_AS_SUBPROJECT)
+    option(BUILD_SERVER "Build HTTP API server" ON)
+    if(BUILD_SERVER)
+        message(STATUS "Building HTTP API server")
+        add_subdirectory(server)
+    endif()
+    add_subdirectory(test)
+    add_subdirectory(benchmark)
 endif()
-
-# ========================================
-# Test Subdirectory
-# ========================================
-add_subdirectory(test)
-
-# ========================================
-# Benchmark Subdirectory
-# ========================================
-add_subdirectory(benchmark)
 
 # ========================================
 # Unit Tests (Google Test)
