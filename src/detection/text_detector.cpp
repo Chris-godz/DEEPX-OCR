@@ -9,6 +9,26 @@
 
 namespace ocr {
 
+namespace {
+
+std::unique_ptr<dxrt::InferenceEngine> createDetectionEngine(
+    const std::string& modelPath,
+    int deviceId,
+    const char* label)
+{
+    if (deviceId >= 0) {
+        dxrt::InferenceOption option;
+        option.devices.push_back(deviceId);
+        LOG_INFO("Loading {} on pinned device {}: {}", label, deviceId, modelPath);
+        return std::make_unique<dxrt::InferenceEngine>(modelPath, option);
+    }
+
+    LOG_INFO("Loading {} with default device selection: {}", label, modelPath);
+    return std::make_unique<dxrt::InferenceEngine>(modelPath);
+}
+
+} // namespace
+
 // Helper function to create directory
 static void createDirectory(const std::string& path) {
     mkdir(path.c_str(), 0755);
@@ -29,7 +49,7 @@ TextDetector::TextDetector(const DetectorConfig& config)
 TextDetector::~TextDetector() {
 }
 
-bool TextDetector::init() {
+bool TextDetector::init(int deviceId) {
     if (initialized_) {
         LOG_WARN("TextDetector already initialized");
         return true;
@@ -53,16 +73,16 @@ bool TextDetector::init() {
 
         // Load 640 model
         if (!config_.model640Path.empty()) {
-            model640_ = std::make_unique<dxrt::InferenceEngine>(config_.model640Path);
+            model640_ = createDetectionEngine(config_.model640Path, deviceId, "det_640 model");
             model640_->RegisterCallback(cb);
-            LOG_INFO("Loaded det_640 model: {}", config_.model640Path);
+            LOG_INFO("Loaded det_640 model");
         }
         
         // Load 960 model
         if (!config_.model960Path.empty()) {
-            model960_ = std::make_unique<dxrt::InferenceEngine>(config_.model960Path);
+            model960_ = createDetectionEngine(config_.model960Path, deviceId, "det_960 model");
             model960_->RegisterCallback(cb);
-            LOG_INFO("Loaded det_960 model: {}", config_.model960Path);
+            LOG_INFO("Loaded det_960 model");
         }
 
         if (!model640_ && !model960_) {

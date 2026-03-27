@@ -6,11 +6,30 @@
 
 namespace ocr {
 
+namespace {
+
+std::unique_ptr<dxrt::InferenceEngine> createClassificationEngine(
+    const std::string& modelPath,
+    int deviceId)
+{
+    if (deviceId >= 0) {
+        dxrt::InferenceOption option;
+        option.devices.push_back(deviceId);
+        LOG_INFO("Loading classification model on pinned device {}: {}", deviceId, modelPath);
+        return std::make_unique<dxrt::InferenceEngine>(modelPath, option);
+    }
+
+    LOG_INFO("Loading classification model with default device selection: {}", modelPath);
+    return std::make_unique<dxrt::InferenceEngine>(modelPath);
+}
+
+} // namespace
+
 TextClassifier::TextClassifier(const ClassifierConfig& config)
     : config_(config) {
 }
 
-bool TextClassifier::Initialize() {
+bool TextClassifier::Initialize(int deviceId) {
     if (config_.modelPath.empty()) {
         LOG_ERROR("Classification model path is empty");
         return false;
@@ -19,7 +38,7 @@ bool TextClassifier::Initialize() {
     LOG_INFO("Loading classification model: {}", config_.modelPath);
     
     try {
-        engine_ = std::make_unique<dxrt::InferenceEngine>(config_.modelPath);
+        engine_ = createClassificationEngine(config_.modelPath, deviceId);
         LOG_INFO("Classification model loaded successfully");
     } catch (const std::exception& e) {
         LOG_ERROR("Failed to load classification model: {}", e.what());

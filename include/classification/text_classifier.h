@@ -53,7 +53,7 @@ public:
     ~TextClassifier() = default;
     
     // Initialize model
-    bool Initialize();
+    bool Initialize(int deviceId = -1);
     
     // Classify single text image (synchronous)
     // Returns: (label, confidence)

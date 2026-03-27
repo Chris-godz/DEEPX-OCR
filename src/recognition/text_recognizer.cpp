@@ -8,11 +8,35 @@
 
 namespace DeepXOCR {
 
+namespace {
+
+std::unique_ptr<dxrt::InferenceEngine> createRecognitionEngine(
+    const std::string& modelPath,
+    int deviceId,
+    int ratio)
+{
+    if (deviceId >= 0) {
+        dxrt::InferenceOption option;
+        option.devices.push_back(deviceId);
+        LOG_INFO(
+            "Loading recognition ratio_{} model on pinned device {}: {}",
+            ratio,
+            deviceId,
+            modelPath);
+        return std::make_unique<dxrt::InferenceEngine>(modelPath, option);
+    }
+
+    LOG_INFO("Loading recognition ratio_{} model with default device selection: {}", ratio, modelPath);
+    return std::make_unique<dxrt::InferenceEngine>(modelPath);
+}
+
+} // namespace
+
 TextRecognizer::TextRecognizer(const RecognizerConfig& config)
     : config_(config) {
 }
 
-bool TextRecognizer::Initialize() {
+bool TextRecognizer::Initialize(int deviceId) {
     if (config_.modelPaths.empty()) {
         LOG_ERROR("No recognition models specified");
         return false;
@@ -22,9 +46,9 @@ bool TextRecognizer::Initialize() {
     LOG_INFO("Loading recognition models...");
     for (const auto& [ratio, model_path] : config_.modelPaths) {
         try {
-            auto model = std::make_unique<dxrt::InferenceEngine>(model_path);
+            auto model = createRecognitionEngine(model_path, deviceId, ratio);
             models_[ratio] = std::move(model);
-            LOG_INFO("  Loaded ratio_{} model: {}", ratio, model_path);
+            LOG_INFO("  Loaded ratio_{} model", ratio);
         } catch (const std::exception& e) {
             LOG_ERROR("Failed to load ratio_{} model: {}", ratio, e.what());
             return false;

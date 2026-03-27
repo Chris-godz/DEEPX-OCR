@@ -80,7 +80,7 @@ public:
      * @brief Initialize detector with model files
      * @return true if successful
      */
-    bool init();
+    bool init(int deviceId = -1);
 
     /**
      * @brief Set the callback function for async detection results

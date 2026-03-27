@@ -14,6 +14,7 @@ namespace ocr {
 
 void OCRPipelineConfig::Show() const {
     LOG_INFO("========== OCR Pipeline Configuration ==========");
+    LOG_INFO("Pipeline Device ID: {}", deviceId);
     LOG_INFO("Detection Config:");
     detectorConfig.Show();
     
@@ -217,7 +218,7 @@ bool OCRPipeline::initialize() {
         });
     });
 
-    if (!detector_->init()) {
+    if (!detector_->init(config_.deviceId)) {
         LOG_ERROR("Failed to initialize TextDetector");
         return false;
     }
@@ -238,7 +239,7 @@ bool OCRPipeline::initialize() {
     // 初始化Classifier（可选）
     if (config_.useClassification) {
         classifier_ = std::make_unique<TextClassifier>(config_.classifierConfig);
-        if (!classifier_->Initialize()) {
+        if (!classifier_->Initialize(config_.deviceId)) {
             LOG_ERROR("Failed to initialize TextClassifier");
             return false;
         }
@@ -253,7 +254,7 @@ bool OCRPipeline::initialize() {
     
     // 初始化Recognizer
     recognizer_ = std::make_unique<TextRecognizer>(config_.recognizerConfig);
-    if (!recognizer_->Initialize()) {
+    if (!recognizer_->Initialize(config_.deviceId)) {
         LOG_ERROR("Failed to initialize TextRecognizer");
         return false;
     }

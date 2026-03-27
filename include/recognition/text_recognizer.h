@@ -58,7 +58,7 @@ public:
     ~TextRecognizer() = default;
     
     // Initialize models and dictionary
-    bool Initialize();
+    bool Initialize(int deviceId = -1);
     
     // Synchronous recognition (single text)
     std::pair<std::string, float> Recognize(const cv::Mat& textImage);

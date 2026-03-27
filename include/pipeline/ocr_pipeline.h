@@ -42,6 +42,9 @@ struct OCRPipelineConfig {
     
     // Recognition配置
     RecognizerConfig recognizerConfig;
+
+    // Pipeline-level device affinity (-1 = runtime default)
+    int deviceId = -1;
     
     // Pipeline配置
     bool enableVisualization = true;  // 是否生成可视化结果
